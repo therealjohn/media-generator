@@ -100,7 +100,7 @@ describe('GenerationModule', () => {
     })
 
     const result = await generation.generate({
-      controls: {},
+      controls: {height: 864, width: 1536},
       creativeBrief: 'Show the dashboard at launch.',
       deployment: {
         adapter: 'mai-image',
@@ -122,6 +122,7 @@ describe('GenerationModule', () => {
     })
 
     expect(result).toMatchObject({
+      controls: {height: 864, width: 1536},
       creativeBrief: 'Show the dashboard at launch.',
       outputs: [
         {

@@ -9,6 +9,11 @@ import type {
   MediaType,
 } from '../catalog/models.js'
 import {
+  findModelDefinition,
+  getVideoModelProfile,
+  resolveExplainerDuration,
+} from '../catalog/models.js'
+import {
   createGenerationModule,
   type GenerationDeployment,
   type GenerationModule,
@@ -18,8 +23,25 @@ import type {
   GenerationStore,
   ResolvedResource,
 } from '../generation/generation-store.js'
+import {fingerprintReference} from '../generation/references.js'
 import type {ModelRuntime} from '../model-runtime/model-runtime.js'
-import type {TextReferenceInput} from '../generation/text-reference.js'
+import {
+  prepareTextReferences,
+  type TextReferenceInput,
+} from '../generation/text-reference.js'
+import {normalizeWebReferences} from '../generation/web-reference.js'
+import type {MediaComposer} from '../media/media-composer.js'
+import type {ImageNormalizer} from '../media/image-normalizer.js'
+import type {StructuredModelRuntime} from '../model-runtime/structured-model-runtime.js'
+import {
+  createExplainerWorkflowDefinition,
+} from '../workflow/explainer-workflow.js'
+import {
+  createExplainerWorkflowHandlers,
+  explainerConcurrencyLimits,
+} from '../workflow/explainer-workflow-runtime.js'
+import {createWorkflowGenerationModule} from '../workflow/workflow-generation-module.js'
+import type {WorkflowGenerationRun} from '../workflow/workflow-generation-module.js'
 
 export interface GeneratorCreateRequest {
   controls: Record<string, unknown>
@@ -37,21 +59,46 @@ export type CreateRequest =
   | GeneratorCreateRequest
   | ScenarioCreateRequest
 
+export interface CreationInput {
+  deployments: Record<string, ResolvedCreationDeployment>
+  force: boolean
+  request: CreateRequest
+  sourceGenerations: string[]
+}
+
 export interface ResolvedCreationDeployment
-  extends GenerationDeployment {}
+  extends GenerationDeployment {
+  defaultVoice?: string
+}
 
 export interface CreationModule {
-  create(input: {
+  create(input: CreationInput): Promise<GenerationRecord>
+  resume(input: {
     deployments: Record<string, ResolvedCreationDeployment>
-    force: boolean
-    request: CreateRequest
-    sourceGenerations: string[]
+    generationId: string
+    scenario: 'explainer-video'
   }): Promise<GenerationRecord>
+  startResume(input: {
+    deployments: Record<string, ResolvedCreationDeployment>
+    generationId: string
+    scenario: 'explainer-video'
+  }): Promise<WorkflowGenerationRun>
+  start(
+    input: CreationInput & {
+      request: Extract<
+        ScenarioCreateRequest,
+        {scenario: 'explainer-video'}
+      >
+    },
+  ): Promise<WorkflowGenerationRun>
 }
 
 export function createCreationModule(dependencies: {
+  imageNormalizer?: ImageNormalizer
+  mediaComposer?: MediaComposer
   modelRuntime: ModelRuntime
   store: GenerationStore
+  structuredModelRuntime?: StructuredModelRuntime
   workspacePath: string
 }): CreationModule {
   const generation = createGenerationModule(dependencies)
@@ -65,13 +112,296 @@ export function createCreationModule(dependencies: {
           sourceGenerations: input.sourceGenerations,
         })
       }
+      if (input.request.scenario === 'explainer-video') {
+        return createExplainerScenario(dependencies, {
+          deployments: input.deployments,
+          request: input.request,
+          sourceGenerations: input.sourceGenerations,
+        })
+      }
       return createScenario(generation, {
         deployments: input.deployments,
         request: input.request,
         sourceGenerations: input.sourceGenerations,
       })
     },
+    async start(input) {
+      return startExplainerScenario(dependencies, {
+        deployments: input.deployments,
+        request: input.request,
+        sourceGenerations: input.sourceGenerations,
+      })
+    },
+    async resume(input) {
+      const run = await startExplainerResume(dependencies, input)
+      return run.completion
+    },
+    startResume: (input) =>
+      startExplainerResume(dependencies, input),
   }
+}
+
+async function startExplainerResume(
+  dependencies: {
+    imageNormalizer?: ImageNormalizer
+    mediaComposer?: MediaComposer
+    modelRuntime: ModelRuntime
+    store: GenerationStore
+    structuredModelRuntime?: StructuredModelRuntime
+    workspacePath: string
+  },
+  input: {
+    deployments: Record<string, ResolvedCreationDeployment>
+    generationId: string
+    scenario: 'explainer-video'
+  },
+): Promise<WorkflowGenerationRun> {
+  if (dependencies.structuredModelRuntime === undefined) {
+    throw new Error(
+      'The structured planning runtime is not available',
+    )
+  }
+  if (dependencies.mediaComposer === undefined) {
+    throw new Error('The media composer is not available')
+  }
+  if (dependencies.imageNormalizer === undefined) {
+    throw new Error('The image normalizer is not available')
+  }
+  const imageNormalizer = dependencies.imageNormalizer
+  const mediaComposer = dependencies.mediaComposer
+  const structuredModelRuntime =
+    dependencies.structuredModelRuntime
+  const workflowGeneration = createWorkflowGenerationModule({
+    store: dependencies.store,
+    workspacePath: dependencies.workspacePath,
+  })
+  return workflowGeneration.startResume({
+    concurrencyLimits: explainerConcurrencyLimits(
+      input.deployments,
+    ),
+    createHandlers: ({generationDirectory}) =>
+      createExplainerWorkflowHandlers({
+        deployments: input.deployments,
+        generationDirectory,
+        imageNormalizer,
+        mediaComposer,
+        modelRuntime: dependencies.modelRuntime,
+        structuredModelRuntime,
+      }),
+    definition: createExplainerWorkflowDefinition(),
+    generationId: input.generationId,
+    maxConcurrency: 8,
+  })
+}
+
+async function createExplainerScenario(
+  dependencies: {
+    imageNormalizer?: ImageNormalizer
+    mediaComposer?: MediaComposer
+    modelRuntime: ModelRuntime
+    store: GenerationStore
+    structuredModelRuntime?: StructuredModelRuntime
+    workspacePath: string
+  },
+  input: {
+    deployments: Record<string, ResolvedCreationDeployment>
+    request: Extract<
+      ScenarioCreateRequest,
+      {scenario: 'explainer-video'}
+    >
+    sourceGenerations: string[]
+  },
+): Promise<GenerationRecord> {
+  const run = await startExplainerScenario(dependencies, input)
+  return run.completion
+}
+
+async function startExplainerScenario(
+  dependencies: {
+    imageNormalizer?: ImageNormalizer
+    mediaComposer?: MediaComposer
+    modelRuntime: ModelRuntime
+    store: GenerationStore
+    structuredModelRuntime?: StructuredModelRuntime
+    workspacePath: string
+  },
+  input: {
+    deployments: Record<string, ResolvedCreationDeployment>
+    request: Extract<
+      ScenarioCreateRequest,
+      {scenario: 'explainer-video'}
+    >
+    sourceGenerations: string[]
+  },
+): Promise<WorkflowGenerationRun> {
+  if (dependencies.structuredModelRuntime === undefined) {
+    throw new Error(
+      'The structured planning runtime is not available',
+    )
+  }
+  if (dependencies.mediaComposer === undefined) {
+    throw new Error('The media composer is not available')
+  }
+  if (dependencies.imageNormalizer === undefined) {
+    throw new Error('The image normalizer is not available')
+  }
+  const imageNormalizer = dependencies.imageNormalizer
+  const mediaComposer = dependencies.mediaComposer
+  const structuredModelRuntime =
+    dependencies.structuredModelRuntime
+  const planning = requireDeployment(input.deployments, 'planning')
+  const referenceImage = requireDeployment(
+    input.deployments,
+    'reference-image',
+  )
+  const visuals = requireDeployment(input.deployments, 'visuals')
+  const voiceSelection = input.request.options.voice
+  const voiceDeployment =
+    voiceSelection.mode === 'off'
+      ? undefined
+      : requireDeployment(input.deployments, 'voice')
+  const voiceId =
+    voiceSelection.mode === 'off'
+      ? undefined
+      : voiceSelection.mode === 'selected'
+        ? voiceSelection.id
+        : voiceDeployment?.defaultVoice
+  if (
+    voiceSelection.mode !== 'off' &&
+    voiceId === undefined
+  ) {
+    throw new Error(
+      'The private Speech Connection does not define a default Voice',
+    )
+  }
+  const durationSeconds = resolveExplainerDuration(
+    visuals.model,
+    input.request.options.duration,
+  )
+  const vertical =
+    input.request.options['aspect-ratio'] === '9:16'
+  const outputWidth = vertical ? 720 : 1280
+  const outputHeight = vertical ? 1280 : 720
+  const references = await Promise.all(
+    input.request.sourcePaths.map((path) =>
+      fingerprintReference(path),
+    ),
+  )
+  validateExplainerImageReferences(referenceImage, references)
+  const textReferences = prepareTextReferences(
+    input.request.textReferences ?? [],
+  )
+  const webReferences = normalizeWebReferences(
+    input.request.webReferenceUrls ?? [],
+  )
+  const definition = getScenarioDefinition('explainer-video')!
+  const preset = definition.presets.find(
+    (candidate) => candidate.id === input.request.preset,
+  )!
+  const resolvedResources = scenarioRolesForRequest(
+    input.request,
+  ).map((role) =>
+    resource(role, requireDeployment(input.deployments, role)),
+  )
+  const workflowGeneration = createWorkflowGenerationModule({
+    store: dependencies.store,
+    workspacePath: dependencies.workspacePath,
+  })
+  const workflowDeployments: Record<
+    string,
+    ResolvedCreationDeployment
+  > = {
+    planning,
+    'reference-image': referenceImage,
+    visuals,
+    ...(voiceDeployment === undefined
+      ? {}
+      : {voice: voiceDeployment}),
+  }
+
+  return workflowGeneration.start({
+    concurrencyLimits: explainerConcurrencyLimits(
+      workflowDeployments,
+    ),
+    createHandlers: ({generationDirectory}) =>
+      createExplainerWorkflowHandlers({
+        deployments: workflowDeployments,
+        generationDirectory,
+        imageNormalizer,
+        mediaComposer,
+        modelRuntime: dependencies.modelRuntime,
+        structuredModelRuntime,
+      }),
+    definition: createExplainerWorkflowDefinition(),
+    inputFiles: textReferences.map((reference) => ({
+      contents: reference.content,
+      path: reference.record.path,
+    })),
+    maxConcurrency: 8,
+    record: {
+      creativeBrief: input.request.creativeBrief,
+      mediaType: 'video',
+      references,
+      resolvedModel: {
+        deployment: visuals.deploymentName,
+        id: visuals.id,
+        model: visuals.model,
+        provider: visuals.provider,
+      },
+      resolvedResources,
+      scenario: {
+        inputs: {
+          sourcePaths: input.request.sourcePaths,
+        },
+        options: {
+          ...input.request.options,
+          duration: durationSeconds,
+          'output-height': outputHeight,
+          'output-width': outputWidth,
+          ...(voiceId === undefined
+            ? {}
+            : {'resolved-voice': voiceId}),
+        },
+      },
+      selection: {
+        kind: 'scenario',
+        preset: input.request.preset,
+        scenario: 'explainer-video',
+      },
+      sourceGenerations: input.sourceGenerations,
+      textReferences: textReferences.map(
+        (reference) => reference.record,
+      ),
+      webReferences,
+    },
+    request: {
+      aspectRatio: input.request.options['aspect-ratio'],
+      clipDurationsSeconds:
+        resolveExplainerClipDurations(visuals.model),
+      creativeBrief: input.request.creativeBrief,
+      durationSeconds,
+      preset: {
+        guidance: preset.guidance,
+        id: preset.id,
+        title: preset.title,
+      },
+      sourceImagePaths: references
+        .filter((reference) =>
+          reference.mediaType.startsWith('image/'),
+        )
+        .map((reference) => reference.path),
+      subtitles: input.request.options.subtitles,
+      textReferences: textReferences.map((reference) => ({
+        format: reference.record.format,
+        path: reference.record.path,
+        title: reference.record.title,
+      })),
+      voiceId,
+      webReferenceUrls: webReferences.map(
+        (reference) => reference.url,
+      ),
+    },
+  })
 }
 
 async function createGenerator(
@@ -110,7 +440,10 @@ async function createScenario(
   generation: GenerationModule,
   input: {
     deployments: Record<string, ResolvedCreationDeployment>
-    request: ScenarioCreateRequest
+    request: Extract<
+      ScenarioCreateRequest,
+      {scenario: 'short-form-video'}
+    >
     sourceGenerations: string[]
   },
 ): Promise<GenerationRecord> {
@@ -118,37 +451,16 @@ async function createScenario(
   const routingRoles = scenarioRolesForRequest(input.request)
   const role = routingRoles[0]!
   const deployment = requireDeployment(input.deployments, role)
-  const voiceEnabled =
-    input.request.scenario === 'explainer-video' &&
-    input.request.options.voice !== undefined
-  const voiceDeployment =
-    voiceEnabled
-      ? requireDeployment(input.deployments, 'voice')
-      : undefined
   const resolvedResources = routingRoles.map((routingRole) =>
     resource(
       routingRole,
       requireDeployment(input.deployments, routingRole),
     ),
   )
-  const operations =
-    input.request.scenario === 'explainer-video'
-      ? [
-          {kind: 'scenario-prepare', status: 'succeeded' as const},
-          {kind: 'video-generate', status: 'running' as const},
-          ...(voiceEnabled
-            ? [
-                {
-                  kind: 'voice-generate',
-                  status: 'running' as const,
-                },
-              ]
-            : []),
-        ]
-      : [
-          {kind: 'scenario-prepare', status: 'succeeded' as const},
-          {kind: 'model-generate', status: 'running' as const},
-        ]
+  const operations = [
+    {kind: 'scenario-prepare', status: 'succeeded' as const},
+    {kind: 'model-generate', status: 'running' as const},
+  ]
   return generation.generate({
     controls: scenarioControls(input.request),
     creativeBrief: input.request.creativeBrief,
@@ -157,12 +469,7 @@ async function createScenario(
     operations,
     progress: {
       completed: 1,
-      stage:
-        input.request.scenario === 'explainer-video'
-          ? voiceEnabled
-            ? 'video-and-voice-generation'
-            : 'video-generation'
-          : 'model-generate',
+      stage: 'model-generate',
       total: operations.length,
     },
     prompt: assembleScenarioPrompt(input.request),
@@ -180,23 +487,6 @@ async function createScenario(
       scenario: input.request.scenario,
     },
     sourceGenerations: input.sourceGenerations,
-    supplementalGenerations:
-      input.request.scenario === 'explainer-video' &&
-      voiceEnabled &&
-      voiceDeployment !== undefined
-        ? [
-            {
-              controls: {
-                voice: input.request.options.voice,
-              },
-              deployment: voiceDeployment,
-              prompt:
-                input.request.options.narration?.trim() ||
-                input.request.creativeBrief,
-              role: 'voice',
-            },
-          ]
-        : undefined,
     textReferences: input.request.textReferences,
     webReferenceUrls: input.request.webReferenceUrls,
   })
@@ -227,23 +517,53 @@ function resource(
 }
 
 function scenarioControls(
-  request: ScenarioCreateRequest,
+  request: Extract<
+    ScenarioCreateRequest,
+    {scenario: 'short-form-video'}
+  >,
 ): Record<string, unknown> {
-  if (request.scenario === 'explainer-video') {
-    const vertical = request.options['aspect-ratio'] === '9:16'
-    return {
-      height: vertical ? 1280 : 720,
-      nSeconds: request.options.duration,
-      nVariants: 1,
-      width: vertical ? 720 : 1280,
-    }
-  }
-
   const vertical = request.options.orientation === 'vertical'
   return {
     height: vertical ? 1280 : 720,
     nSeconds: request.options['clip-duration'],
     nVariants: request.options['clip-count'],
     width: vertical ? 720 : 1280,
+  }
+}
+
+function resolveExplainerClipDurations(
+  modelName: string,
+): number[] {
+  return getVideoModelProfile(modelName).clipDurationsSeconds
+}
+
+function validateExplainerImageReferences(
+  deployment: ResolvedCreationDeployment,
+  references: Array<{mediaType: string}>,
+): void {
+  const definition = findModelDefinition(deployment.model)
+  if (definition === undefined) {
+    throw new Error(
+      `Reference-image model "${deployment.model}" is not supported`,
+    )
+  }
+  const imageReferences = references.filter((reference) =>
+    reference.mediaType.startsWith('image/'),
+  )
+  if (
+    imageReferences.length > 0 &&
+    !definition.capabilities.acceptsImageReferences
+  ) {
+    throw new Error(
+      `Reference-image model "${deployment.model}" does not accept image references`,
+    )
+  }
+  if (
+    imageReferences.length >
+    definition.capabilities.maxReferences
+  ) {
+    throw new Error(
+      `Reference-image model "${deployment.model}" accepts at most ${definition.capabilities.maxReferences} image reference${definition.capabilities.maxReferences === 1 ? '' : 's'}`,
+    )
   }
 }

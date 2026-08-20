@@ -24,6 +24,7 @@ const providerConnectionSchema = z.object({
 
 const modelDeploymentSchema = z.object({
   adapter: z.enum([
+    'azure-openai-chat',
     'azure-openai-image',
     'bfl-flux',
     'mai-image',
@@ -173,7 +174,7 @@ export function parseWorkspaceManifest(
       generators.video = videoRoute
     }
 
-    return removeObsoleteSpeechDeployments({
+    return normalizeManifest({
       ...legacy,
       routing: {
         generators,
@@ -198,7 +199,40 @@ export function parseWorkspaceManifest(
     )
   }
 
-  return removeObsoleteSpeechDeployments(result.data)
+  return normalizeManifest(result.data)
+}
+
+function normalizeManifest(
+  manifest: WorkspaceManifest,
+): WorkspaceManifest {
+  return removeInternalWorkflowRoutes(
+    removeObsoleteSpeechDeployments(manifest),
+  )
+}
+
+function removeInternalWorkflowRoutes(
+  manifest: WorkspaceManifest,
+): WorkspaceManifest {
+  const explainerRoutes =
+    manifest.routing.scenarios['explainer-video']
+  if (explainerRoutes === undefined) {
+    return manifest
+  }
+  const {
+    planning: _planning,
+    'reference-image': _referenceImage,
+    ...publicRoutes
+  } = explainerRoutes
+  return {
+    ...manifest,
+    routing: {
+      ...manifest.routing,
+      scenarios: {
+        ...manifest.routing.scenarios,
+        'explainer-video': publicRoutes,
+      },
+    },
+  }
 }
 
 function removeObsoleteSpeechDeployments(

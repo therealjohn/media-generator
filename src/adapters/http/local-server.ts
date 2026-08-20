@@ -1,5 +1,8 @@
-import {fileURLToPath} from 'node:url'
+import {randomUUID} from 'node:crypto'
 import {createReadStream} from 'node:fs'
+import {stat} from 'node:fs/promises'
+import {basename, extname, resolve} from 'node:path'
+import {fileURLToPath} from 'node:url'
 
 import fastifyStatic from '@fastify/static'
 import Fastify, {type FastifyInstance} from 'fastify'
@@ -12,9 +15,17 @@ import type {
 import {MediaGenError} from '../../application/media-gen-error.js'
 import {defaultStyleFor} from '../../catalog/styles.js'
 import {parseScenarioRequest} from '../../catalog/scenarios.js'
+import {mediaTypeForReferencePath} from '../../generation/references.js'
+import {
+  openReferenceFilePicker,
+  type ReferenceFilePickerRequest,
+} from './reference-file-picker.js'
 
 export interface LocalServerOptions {
   application: MediaGenApplication
+  browseReferenceFiles?: (
+    request: ReferenceFilePickerRequest,
+  ) => Promise<string[]>
   context: CommandContext
   uiRoot?: string
 }
@@ -23,6 +34,10 @@ export function createLocalServer(
   options: LocalServerOptions,
 ): FastifyInstance {
   const server = Fastify({logger: false})
+  const referencePreviews = new Map<
+    string,
+    {mediaType: string; path: string}
+  >()
   server.addHook('onRequest', async (request, reply) => {
     const origin = request.headers.origin
     if (
@@ -58,10 +73,14 @@ export function createLocalServer(
       options.context,
     ),
   )
-  server.post('/api/create', async (request) => {
+  server.post('/api/create', async (request, reply) => {
     const body = createBodySchema.parse(request.body)
-    return options.application.execute(
+    const background =
+      body.request.kind === 'scenario' &&
+      body.request.scenario === 'explainer-video'
+    const result = await options.application.execute(
       {
+        background,
         force: body.force,
         request:
           body.request.kind === 'scenario'
@@ -74,6 +93,10 @@ export function createLocalServer(
       },
       options.context,
     )
+    if (background) {
+      reply.code(202)
+    }
+    return result
   })
   server.get('/api/scenarios', async () =>
     options.application.execute(
@@ -151,6 +174,30 @@ export function createLocalServer(
         .send(createReadStream(output.path))
     },
   )
+  server.get(
+    '/api/generations/:id/references/:index',
+    async (request, reply) => {
+      const {id, index} = outputParamsSchema.parse(request.params)
+      const result = await options.application.execute(
+        {id, type: 'generations-get'},
+        options.context,
+      )
+      if (result.type !== 'generations-get') {
+        throw new Error('Expected Generation detail')
+      }
+      const reference = result.generation.references[index]
+      if (reference === undefined) {
+        return reply.status(404).send({
+          code: 'reference_not_found',
+          error: true,
+          message: `Generation reference ${index} was not found`,
+        })
+      }
+      return reply
+        .type(reference.mediaType)
+        .send(createReadStream(reference.path))
+    },
+  )
   server.delete('/api/generations/:id', async (request) => {
     const {id} = idParamsSchema.parse(request.params)
     const query = forceQuerySchema.parse(request.query)
@@ -176,18 +223,42 @@ export function createLocalServer(
       options.context,
     )
   })
-  server.post('/api/generations/:id/recreate', async (request) => {
+  server.post(
+    '/api/generations/:id/recreate',
+    async (request, reply) => {
+      const {id} = idParamsSchema.parse(request.params)
+      const body = reuseBodySchema.parse(request.body)
+      const result = await options.application.execute(
+        {
+          background: true,
+          creativeBrief: body.creativeBrief,
+          id,
+          style: body.style,
+          type: 'generations-recreate',
+        },
+        options.context,
+      )
+      if (
+        result.type === 'generations-recreate' &&
+        !['failed', 'succeeded'].includes(result.generation.status)
+      ) {
+        reply.code(202)
+      }
+      return result
+    },
+  )
+  server.post('/api/generations/:id/resume', async (request, reply) => {
     const {id} = idParamsSchema.parse(request.params)
-    const body = reuseBodySchema.parse(request.body)
-    return options.application.execute(
+    const result = await options.application.execute(
       {
-        creativeBrief: body.creativeBrief,
+        background: true,
         id,
-        style: body.style,
-        type: 'generations-recreate',
+        type: 'generations-resume',
       },
       options.context,
     )
+    reply.code(202)
+    return result
   })
   server.post('/api/generations/:id/edit', async (request) => {
     const {id} = idParamsSchema.parse(request.params)
@@ -212,6 +283,85 @@ export function createLocalServer(
       options.context,
     )
   })
+  server.post('/api/reference-files/browse', async (request) => {
+    const body = browseReferenceFilesBodySchema.parse(request.body)
+    const pickerRequest: ReferenceFilePickerRequest =
+      body.purpose === 'source-video'
+        ? {
+            extensions: ['.mp4', '.mov'],
+            multiple: false,
+            title: 'Choose source video',
+          }
+        : {multiple: true, title: 'Choose reference files'}
+    const selectedPaths = await (
+      options.browseReferenceFiles ?? openReferenceFilePicker
+    )(pickerRequest)
+    const uniquePaths = [...new Set(selectedPaths)]
+    if (
+      body.purpose === 'source-video' &&
+      uniquePaths.length !== 1
+    ) {
+      throw new MediaGenError(
+        'invalid_source_video',
+        'Choose exactly one source video',
+      )
+    }
+    const files = await Promise.all(
+      uniquePaths.map(async (selectedPath) => {
+        const path = resolve(selectedPath)
+        const fileStat = await stat(path)
+        if (!fileStat.isFile()) {
+          throw new MediaGenError(
+            'reference_file_invalid',
+            `Reference path is not a file: ${path}`,
+          )
+        }
+        const mediaType = mediaTypeForReferencePath(path)
+        if (
+          body.purpose === 'source-video' &&
+          !['.mov', '.mp4'].includes(extname(path).toLowerCase())
+        ) {
+          throw new MediaGenError(
+            'invalid_source_video',
+            'Short-form video source must be an MP4 or MOV file',
+          )
+        }
+        const previewUrl = mediaType.startsWith('image/')
+          ? registerReferencePreview(
+              referencePreviews,
+              path,
+              mediaType,
+            )
+          : undefined
+        return {
+          mediaType,
+          name: basename(path),
+          path,
+          ...(previewUrl === undefined ? {} : {previewUrl}),
+        }
+      }),
+    )
+    return {files, type: 'reference-files-browse'}
+  })
+  server.get(
+    '/api/reference-files/previews/:token',
+    async (request, reply) => {
+      const {token} = referencePreviewParamsSchema.parse(
+        request.params,
+      )
+      const preview = referencePreviews.get(token)
+      if (preview === undefined) {
+        return reply.status(404).send({
+          code: 'reference_preview_not_found',
+          error: true,
+          message: 'The reference preview was not found',
+        })
+      }
+      return reply
+        .type(preview.mediaType)
+        .send(createReadStream(preview.path))
+    },
+  )
   server.get('/api/auth', async () =>
     options.application.execute({type: 'auth-status'}, options.context),
   )
@@ -382,13 +532,25 @@ const referencesBodySchema = z.object({
   ids: z.array(z.string().min(1)).min(1),
 })
 
+const browseReferenceFilesBodySchema = z
+  .object({
+    purpose: z
+      .enum(['references', 'source-video'])
+      .default('references'),
+  })
+  .default({purpose: 'references'})
+
+const referencePreviewParamsSchema = z.object({
+  token: z.string().min(1),
+})
+
 const configureFoundryBodySchema = z.object({
   endpoint: z.url(),
   name: z.string().min(1),
 })
 
 const configureSpeechBodySchema = z.object({
-  apiKey: z.string().min(1),
+  apiKey: z.string().default(''),
   endpoint: z.url(),
   voice: z.string().min(1),
 })
@@ -412,3 +574,22 @@ function isLoopbackOrigin(value: string): boolean {
     return false
   }
 }
+
+function registerReferencePreview(
+  previews: Map<string, {mediaType: string; path: string}>,
+  path: string,
+  mediaType: string,
+): string {
+  while (previews.size >= maxReferencePreviews) {
+    const oldestToken = previews.keys().next().value
+    if (oldestToken === undefined) {
+      break
+    }
+    previews.delete(oldestToken)
+  }
+  const token = randomUUID()
+  previews.set(token, {mediaType, path})
+  return `/api/reference-files/previews/${token}`
+}
+
+const maxReferencePreviews = 64

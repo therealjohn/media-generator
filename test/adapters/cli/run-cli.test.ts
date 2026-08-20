@@ -38,11 +38,12 @@ describe('runCli', () => {
             kind: 'scenario',
             options: {
               'aspect-ratio': '16:9',
-              duration: 12,
-              narration:
-                'Retrieval-augmented generation grounds answers in trusted sources.',
+              duration: 20,
               subtitles: true,
-              voice: 'en-US-Harper:MAI-Voice-2',
+              voice: {
+                id: 'en-US-Harper:MAI-Voice-2',
+                mode: 'selected',
+              },
             },
             preset: 'editorial-motion-graphics',
             scenario: 'explainer-video',
@@ -74,11 +75,9 @@ describe('runCli', () => {
         'editorial-motion-graphics',
         '--voice',
         'en-US-Harper:MAI-Voice-2',
-        '--narration',
-        'Retrieval-augmented generation grounds answers in trusted sources.',
         '--subtitles',
         '--duration',
-        '12',
+        '20',
         '--aspect-ratio',
         '16:9',
         '--output',
@@ -96,6 +95,89 @@ describe('runCli', () => {
 
     expect(exitCode).toBe(0)
     expect(stderr.join('')).toContain('Creating Explainer video')
+  })
+
+  test('defaults Explainer Voice to Auto and duration to one minute', async () => {
+    const application: MediaGenApplication = {
+      execute: async (command) => {
+        expect(command).toMatchObject({
+          request: {
+            options: {
+              duration: 60,
+              voice: {mode: 'auto'},
+            },
+            scenario: 'explainer-video',
+          },
+          type: 'create',
+        })
+        return {
+          generation: generationRecord('01EXPLAINER'),
+          type: 'create',
+        }
+      },
+    }
+
+    await expect(
+      runCli(
+        [
+          'create',
+          'explainer-video',
+          '--prompt',
+          'Explain retrieval-augmented generation.',
+          '--output',
+          'json',
+        ],
+        {
+          bin: 'mg',
+          cwd: 'C:\\work',
+          mediaGenHome: 'C:\\home',
+          stderr: () => undefined,
+          stdout: () => undefined,
+        },
+        application,
+      ),
+    ).resolves.toBe(0)
+  })
+
+  test('allows Explainer Voice to be explicitly disabled', async () => {
+    const application: MediaGenApplication = {
+      execute: async (command) => {
+        expect(command).toMatchObject({
+          request: {
+            options: {
+              voice: {mode: 'off'},
+            },
+          },
+          type: 'create',
+        })
+        return {
+          generation: generationRecord('01EXPLAINER'),
+          type: 'create',
+        }
+      },
+    }
+
+    await expect(
+      runCli(
+        [
+          'create',
+          'explainer-video',
+          '--prompt',
+          'Explain retrieval-augmented generation.',
+          '--no-voice',
+          '--output',
+          'json',
+        ],
+        {
+          bin: 'mg',
+          cwd: 'C:\\work',
+          mediaGenHome: 'C:\\home',
+          stderr: () => undefined,
+          stdout: () => undefined,
+        },
+        application,
+      ),
+    ).resolves.toBe(0)
   })
 
   test('creates a Short-form video with clipping options', async () => {
@@ -708,6 +790,35 @@ describe('runCli', () => {
     })
   })
 
+  test('resumes a failed workflow Generation', async () => {
+    const application: MediaGenApplication = {
+      execute: async (command) => {
+        expect(command).toEqual({
+          id: '01FAILED',
+          type: 'generations-resume',
+        })
+        return {
+          generation: generationRecord('01FAILED'),
+          type: 'generations-resume',
+        }
+      },
+    }
+
+    await expect(
+      runCli(
+        ['generations', 'resume', '01FAILED', '--output', 'json'],
+        {
+          bin: 'mg',
+          cwd: 'C:\\work',
+          mediaGenHome: 'C:\\home',
+          stderr: () => undefined,
+          stdout: () => undefined,
+        },
+        application,
+      ),
+    ).resolves.toBe(0)
+  })
+
   test('recreates a Scenario with Preset and Production Option overrides', async () => {
     const application: MediaGenApplication = {
       execute: async (command) => {
@@ -973,6 +1084,7 @@ describe('runCli', () => {
 
   function generationRecord(id: string) {
     return {
+      controls: {},
       createdAt: '2026-08-18T12:00:00.000Z',
       creativeBrief: 'Brief',
       error: null,
@@ -1000,7 +1112,7 @@ describe('runCli', () => {
       ],
       runtime: {catalogVersion: '4', cliVersion: '0.0.0'},
       scenario: null,
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       selection: {
         generator: 'image' as const,
         kind: 'generator' as const,
@@ -1199,7 +1311,7 @@ describe('runCli', () => {
     const stdout: string[] = []
     const apiKey = 'private-speech-key'
     const endpoint =
-      'https://speech-resource.cognitiveservices.azure.com/'
+      'https://eastus2.tts.speech.microsoft.com/'
     const voice = 'en-US-Ethan:MAI-Voice-2'
     const application: MediaGenApplication = {
       execute: async (command) => {
@@ -1544,6 +1656,10 @@ describe('runCli', () => {
       'mg generations recreate <id> [--prompt <text>] [--style <style>] [--output toon|json]',
     ],
     [
+      ['generations', 'resume'],
+      'mg generations resume <id> [--output toon|json]',
+    ],
+    [
       ['generations', 'edit'],
       'mg generations edit <id> --prompt <text> [--style <style>] [--output toon|json]',
     ],
@@ -1670,11 +1786,37 @@ describe('runCli', () => {
     const output = stdout.join('')
     expect(exitCode).toBe(0)
     expect(output).toContain(
-      'Save a private Azure Speech resource endpoint, API key, and default MAI Voice.',
+      'Save a regional Azure Speech synthesis endpoint, private API key, and default MAI Voice.',
     )
     expect(output).toContain('--api-key <key>')
     expect(output).toContain('MEDIA_GEN_SPEECH_API_KEY')
     expect(output).toContain('--voice <name>')
+  })
+
+  test('explains Explainer Voice and duration defaults', async () => {
+    const stdout: string[] = []
+
+    await runCli(
+      ['create', 'explainer-video', '--help'],
+      {
+        bin: 'mg',
+        cwd: 'C:\\work',
+        mediaGenHome: 'C:\\home',
+        stderr: () => undefined,
+        stdout: (text) => stdout.push(text),
+      },
+    )
+
+    const output = stdout.join('')
+    expect(output).toContain(
+      '--voice <auto|id>       Narration Voice (default: auto)',
+    )
+    expect(output).toContain(
+      '--no-voice              Disable narration',
+    )
+    expect(output).toContain(
+      '--duration <seconds>    Total duration from 15 to 600 seconds',
+    )
   })
 
   test('returns a structured usage error for an unknown command', async () => {

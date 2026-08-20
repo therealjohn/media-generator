@@ -147,6 +147,53 @@ describe('parseWorkspaceManifest', () => {
     })
   })
 
+  test('accepts a structured planning model deployment', () => {
+    const manifest = parseWorkspaceManifest({
+        deployments: {
+          'primary:planner': {
+            adapter: 'azure-openai-chat',
+            deploymentName: 'planner',
+            model: 'gpt-4.1-mini',
+            provider: 'primary',
+          },
+        },
+        export: {},
+        providers: {
+          primary: {
+            kind: 'microsoft-foundry',
+            projectEndpoint:
+              'https://example.services.ai.azure.com/api/projects/media',
+          },
+        },
+        routing: {
+          generators: {},
+          scenarios: {
+            'explainer-video': {
+              planning: {auto: ['primary:planner']},
+            },
+          },
+        },
+        scenarios: {enabled: ['explainer-video']},
+        schemaVersion: 2,
+        workspace: {name: 'Project'},
+      })
+    expect(manifest).toMatchObject({
+      deployments: {
+        'primary:planner': {
+          adapter: 'azure-openai-chat',
+        },
+      },
+      routing: {
+        scenarios: {
+          'explainer-video': {},
+        },
+      },
+    })
+    expect(
+      manifest.routing.scenarios['explainer-video'],
+    ).not.toHaveProperty('planning')
+  })
+
   test('removes obsolete shared MAI Voice deployment configuration', () => {
     const manifest = parseWorkspaceManifest({
         deployments: {

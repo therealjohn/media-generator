@@ -80,8 +80,6 @@ export async function runCli(
       !argument.startsWith('--name=') &&
       argument !== '--model' &&
       !argument.startsWith('--model=') &&
-      argument !== '--narration' &&
-      !argument.startsWith('--narration=') &&
       argument !== '--output' &&
       !argument.startsWith('--output=') &&
       argument !== '--path' &&
@@ -121,6 +119,7 @@ export async function runCli(
       argument !== '--source' &&
       !argument.startsWith('--source=') &&
       argument !== '--subtitles' &&
+      argument !== '--no-voice' &&
       argument !== '--voice' &&
       !argument.startsWith('--voice=') &&
       argument !== '--width' &&
@@ -236,6 +235,7 @@ export async function runCli(
           'logout',
           'recreate',
           'reference',
+          'resume',
           'scenarios',
           'short-form-video',
           'speech',
@@ -260,7 +260,7 @@ export async function runCli(
       height: Flags.integer(),
       name: Flags.string(),
       model: Flags.string(),
-      narration: Flags.string(),
+      'no-voice': Flags.boolean({default: false}),
       output: Flags.string({
         default: 'toon',
         options: ['json', 'toon'],
@@ -369,13 +369,19 @@ export async function runCli(
                     ...(flags.duration === undefined
                       ? {}
                       : {duration: flags.duration}),
-                    ...(flags.narration === undefined
-                      ? {}
-                      : {narration: flags.narration}),
                     subtitles: flags.subtitles === true,
-                    ...(flags.voice === undefined
-                      ? {}
-                      : {voice: flags.voice}),
+                    voice:
+                      flags['no-voice'] === true
+                        ? {mode: 'off' as const}
+                        : flags.voice === undefined ||
+                            flags.voice.toLowerCase() === 'auto'
+                          ? {mode: 'auto' as const}
+                          : flags.voice.toLowerCase() === 'off'
+                            ? {mode: 'off' as const}
+                            : {
+                                id: flags.voice,
+                                mode: 'selected' as const,
+                              },
                   }
                 : {
                     ...(flags['clip-count'] === undefined
@@ -473,6 +479,12 @@ export async function runCli(
           preset: flags.preset,
           style: flags.style,
           type: 'generations-recreate' as const,
+        }
+      : args.command === 'generations' &&
+        args.action === 'resume'
+        ? {
+          id: args.id ?? '',
+          type: 'generations-resume' as const,
         }
       : args.command === 'generations' &&
         args.action === 'edit'
@@ -690,7 +702,6 @@ function findCommand(argv: string[]): string | undefined {
       argument === '--language' ||
       argument === '--link' ||
       argument === '--model' ||
-      argument === '--narration' ||
       argument === '--output' ||
       argument === '--path' ||
       argument === '--orientation' ||

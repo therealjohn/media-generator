@@ -82,6 +82,7 @@ _Avoid_: Creative Brief, Model Prompt
 
 **Reference Asset**:
 An existing local file used as generation input through its original path. It remains outside the Media Workspace and can become unavailable if it moves or changes.
+Workflow-generated consistency images are private working artifacts, not Reference Assets or user setup.
 _Avoid_: Text Reference, Web Reference, Exported Asset, generated asset
 
 **Text Reference**:
@@ -121,5 +122,5 @@ The private, machine-local connection to an Azure Speech resource used to synthe
 _Avoid_: Model Deployment, Foundry deployment, voice route
 
 **Voice**:
-A named speech persona selected as an optional Production Option and synthesized through a Speech Connection. When no Voice is selected, the Generation produces no narration audio.
+A named speech persona synthesized through a Speech Connection. An Explainer request can use Auto to resolve the Speech Connection's default Voice. The Local UI selects that default Voice by name so a Business Creator can choose another Voice or explicitly turn Voice off.
 _Avoid_: Model Deployment, speaker file

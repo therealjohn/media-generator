@@ -54,7 +54,7 @@ describe('MediaGenApplication', () => {
         {
           apiKey: 'private-speech-key',
           endpoint:
-            'https://speech-resource.cognitiveservices.azure.com/speech/path',
+            'https://eastus2.tts.speech.microsoft.com/speech/path',
           type: 'configure-speech',
           voice: 'en-US-Ethan:MAI-Voice-2',
         },
@@ -62,7 +62,7 @@ describe('MediaGenApplication', () => {
       ),
     ).resolves.toEqual({
       endpoint:
-        'https://speech-resource.cognitiveservices.azure.com/',
+        'https://eastus2.tts.speech.microsoft.com/',
       state: 'configured',
       type: 'configure-speech',
       voice: 'en-US-Ethan:MAI-Voice-2',
@@ -75,7 +75,7 @@ describe('MediaGenApplication', () => {
         apiKey: 'private-speech-key',
         defaultVoice: 'en-US-Ethan:MAI-Voice-2',
         endpoint:
-          'https://speech-resource.cognitiveservices.azure.com/',
+          'https://eastus2.tts.speech.microsoft.com/',
       },
     })
     const settings = await application.execute(
@@ -87,11 +87,99 @@ describe('MediaGenApplication', () => {
         configured: true,
         defaultVoice: 'en-US-Ethan:MAI-Voice-2',
         endpoint:
-          'https://speech-resource.cognitiveservices.azure.com/',
+          'https://eastus2.tts.speech.microsoft.com/',
       },
       type: 'settings-get',
     })
     expect(JSON.stringify(settings)).not.toContain('private-speech-key')
+  })
+
+  test('updates the Speech synthesis endpoint without replacing its private key', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'media-gen-speech-update-'),
+    )
+    temporaryDirectories.push(root)
+    const cwd = join(root, 'Project')
+    const mediaGenHome = join(root, 'home')
+    await mkdir(cwd)
+    const application = createMediaGenApplication({
+      createWorkspaceId: () => '01SPEECH',
+    })
+    const initialized = await application.execute(
+      {type: 'init'},
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    if (initialized.type !== 'init') {
+      throw new Error('Expected init result')
+    }
+    await application.execute(
+      {
+        apiKey: 'private-speech-key',
+        endpoint: 'https://eastus.tts.speech.microsoft.com/',
+        type: 'configure-speech',
+        voice: 'en-US-Ethan:MAI-Voice-2',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+
+    await expect(
+      application.execute(
+        {
+          apiKey: '',
+          endpoint:
+            'https://eastus2.tts.speech.microsoft.com/',
+          type: 'configure-speech',
+          voice: 'en-US-Harper:MAI-Voice-2',
+        },
+        {bin: 'mg', cwd, mediaGenHome},
+      ),
+    ).resolves.toMatchObject({
+      endpoint: 'https://eastus2.tts.speech.microsoft.com/',
+      voice: 'en-US-Harper:MAI-Voice-2',
+    })
+    await expect(
+      readJson(join(initialized.workspace.path, 'local.json')),
+    ).resolves.toMatchObject({
+      speech: {
+        apiKey: 'private-speech-key',
+        defaultVoice: 'en-US-Harper:MAI-Voice-2',
+        endpoint: 'https://eastus2.tts.speech.microsoft.com/',
+      },
+    })
+  })
+
+  test('rejects a general Cognitive Services URL as a synthesis endpoint', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'media-gen-speech-resource-endpoint-'),
+    )
+    temporaryDirectories.push(root)
+    const cwd = join(root, 'Project')
+    const mediaGenHome = join(root, 'home')
+    await mkdir(cwd)
+    const application = createMediaGenApplication({
+      createWorkspaceId: () => '01SPEECH',
+    })
+    await application.execute(
+      {type: 'init'},
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+
+    await expect(
+      application.execute(
+        {
+          apiKey: 'private-speech-key',
+          endpoint:
+            'https://speech-resource.cognitiveservices.azure.com/',
+          type: 'configure-speech',
+          voice: 'en-US-Ethan:MAI-Voice-2',
+        },
+        {bin: 'mg', cwd, mediaGenHome},
+      ),
+    ).rejects.toMatchObject({
+      code: 'invalid_speech_endpoint',
+      message:
+        'Azure Speech synthesis endpoint must use a regional tts.speech.microsoft.com hostname',
+    })
   })
 
   test('rejects an insecure Azure Speech endpoint before storing the API key', async () => {
@@ -424,8 +512,24 @@ describe('MediaGenApplication', () => {
       createWorkspaceId: () => '01WORKSPACE',
       foundryDiscovery: {
         listDeployments: async () => [
+          foundryDeployment('planner', 'gpt-5.4'),
+          foundryDeployment('reference', 'MAI-Image-2.5'),
           foundryDeployment('sora', 'sora-2'),
         ],
+      },
+      imageNormalizer: testImageNormalizer(),
+      mediaComposer: {
+        compose: async (request) => {
+          await mkdir(join(request.outputPath, '..'), {
+            recursive: true,
+          })
+          await writeFile(request.outputPath, 'final explainer')
+          return {
+            durationSeconds: 20,
+            mediaType: 'video/mp4',
+            path: request.outputPath,
+          }
+        },
       },
       modelRuntime: {
         generate: async (request) => {
@@ -434,15 +538,26 @@ describe('MediaGenApplication', () => {
             jobId: null,
             outputs: [
               {
-                contents: Buffer.from('video'),
-                extension: '.mp4',
-                mediaType: 'video/mp4',
+                contents: Buffer.from(request.adapter),
+                extension:
+                  request.adapter === 'sora-video'
+                    ? '.mp4'
+                    : '.png',
+                mediaType:
+                  request.adapter === 'sora-video'
+                    ? 'video/mp4'
+                    : 'image/png',
               },
             ],
           }
         },
       },
       now: () => new Date('2026-08-18T12:00:00.000Z'),
+      structuredModelRuntime: {
+        generate: async () => ({
+          value: oneSceneExplainerPlan(),
+        }),
+      },
     })
     await application.execute(
       {type: 'init'},
@@ -476,8 +591,9 @@ describe('MediaGenApplication', () => {
             kind: 'scenario',
             options: {
               'aspect-ratio': '16:9',
-              duration: 12,
+              duration: 20,
               subtitles: true,
+              voice: {mode: 'off'},
             },
             preset: 'editorial-motion-graphics',
             scenario: 'explainer-video',
@@ -491,17 +607,322 @@ describe('MediaGenApplication', () => {
       generation: {
         id: '01EXPLAINER',
         operations: [
-          {kind: 'scenario-prepare'},
-          {kind: 'video-generate'},
+          {kind: 'plan'},
+          {kind: 'reference-image'},
+          {kind: 'normalize-reference-image'},
+          {kind: 'scene-1-video'},
+          {kind: 'compose'},
         ],
         outputs: [{mediaType: 'video/mp4'}],
         resolvedResources: [
+          {id: 'primary:planner', role: 'planning'},
+          {id: 'primary:reference', role: 'reference-image'},
           {id: 'primary:sora', role: 'visuals'},
         ],
       },
       type: 'create',
     })
-    expect(requests).toEqual([{adapter: 'sora-video'}])
+    expect(requests).toEqual([
+      {adapter: 'mai-image'},
+      {adapter: 'sora-video'},
+    ])
+  })
+
+  test('starts an Explainer in the background for the Local UI', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'media-gen-explainer-background-'),
+    )
+    temporaryDirectories.push(root)
+    const cwd = join(root, 'Project')
+    const mediaGenHome = join(root, 'home')
+    let releasePlan: () => void = () => undefined
+    const planGate = new Promise<{
+      value: ReturnType<typeof oneSceneExplainerPlan>
+    }>((resolve) => {
+      releasePlan = () =>
+        resolve({value: oneSceneExplainerPlan()})
+    })
+    const backgroundErrors: unknown[] = []
+    await mkdir(cwd)
+    const application = createMediaGenApplication({
+      createGenerationId: () => '01BACKGROUND',
+      createWorkspaceId: () => '01WORKSPACE',
+      foundryDiscovery: {
+        listDeployments: async () => [
+          foundryDeployment('planner', 'gpt-4.1-mini'),
+          foundryDeployment('reference', 'MAI-Image-2.5'),
+          foundryDeployment('sora', 'sora-2'),
+        ],
+      },
+      imageNormalizer: testImageNormalizer(),
+      mediaComposer: {
+        compose: async (request) => {
+          await mkdir(join(request.outputPath, '..'), {
+            recursive: true,
+          })
+          await writeFile(request.outputPath, 'final explainer')
+          return {
+            durationSeconds: 20,
+            mediaType: 'video/mp4',
+            path: request.outputPath,
+          }
+        },
+      },
+      modelRuntime: {
+        generate: async (request) => ({
+          jobId: null,
+          outputs: [
+            {
+              contents: Buffer.from(request.adapter),
+              extension:
+                request.adapter === 'sora-video'
+                  ? '.mp4'
+                  : '.png',
+              mediaType:
+                request.adapter === 'sora-video'
+                  ? 'video/mp4'
+                  : 'image/png',
+            },
+          ],
+        }),
+      },
+      now: () => new Date('2026-08-19T20:00:00.000Z'),
+      reportBackgroundError: (error) => {
+        backgroundErrors.push(error)
+      },
+      structuredModelRuntime: {
+        generate: async () => planGate,
+      },
+    })
+    await application.execute(
+      {type: 'init'},
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    await application.execute(
+      {
+        endpoint:
+          'https://example.services.ai.azure.com/api/projects/media',
+        name: 'primary',
+        type: 'configure-foundry',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    await application.execute(
+      {
+        enabled: true,
+        id: 'explainer-video',
+        type: 'scenarios-set-enabled',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+
+    await expect(
+      application.execute(
+        {
+          background: true,
+          force: false,
+          request: {
+            creativeBrief: 'Explain retrieval-augmented generation.',
+            deploymentOverrides: {},
+            kind: 'scenario',
+            options: {
+              'aspect-ratio': '16:9',
+              duration: 20,
+              subtitles: true,
+              voice: {mode: 'off'},
+            },
+            preset: 'editorial-motion-graphics',
+            scenario: 'explainer-video',
+            sourcePaths: [],
+          },
+          type: 'create',
+        },
+        {bin: 'mg', cwd, mediaGenHome},
+      ),
+    ).resolves.toMatchObject({
+      generation: {
+        id: '01BACKGROUND',
+        status: 'created',
+      },
+      type: 'create',
+    })
+
+    releasePlan()
+    let completed = false
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await application.execute(
+        {id: '01BACKGROUND', type: 'generations-get'},
+        {bin: 'mg', cwd, mediaGenHome},
+      )
+      if (
+        result.type === 'generations-get' &&
+        result.generation.status === 'succeeded'
+      ) {
+        completed = true
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(backgroundErrors).toEqual([])
+    expect(completed).toBe(true)
+  })
+
+  test('recreates an Explainer in the background for the Local UI', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'media-gen-explainer-recreate-background-'),
+    )
+    temporaryDirectories.push(root)
+    const cwd = join(root, 'Project')
+    const mediaGenHome = join(root, 'home')
+    const ids = ['01SOURCE', '01RECREATED']
+    let planningCall = 0
+    let releaseRecreatePlan: () => void = () => undefined
+    const recreatePlanGate = new Promise<{
+      value: ReturnType<typeof oneSceneExplainerPlan>
+    }>((resolve) => {
+      releaseRecreatePlan = () =>
+        resolve({value: oneSceneExplainerPlan()})
+    })
+    const backgroundErrors: unknown[] = []
+    await mkdir(cwd)
+    const application = createMediaGenApplication({
+      createGenerationId: () => ids.shift() ?? 'unexpected',
+      createWorkspaceId: () => '01WORKSPACE',
+      foundryDiscovery: {
+        listDeployments: async () => [
+          foundryDeployment('planner', 'gpt-4.1-mini'),
+          foundryDeployment('reference', 'MAI-Image-2.5'),
+          foundryDeployment('sora', 'sora-2'),
+        ],
+      },
+      imageNormalizer: testImageNormalizer(),
+      mediaComposer: {
+        compose: async (request) => {
+          await mkdir(join(request.outputPath, '..'), {
+            recursive: true,
+          })
+          await writeFile(request.outputPath, 'final explainer')
+          return {
+            durationSeconds: 20,
+            mediaType: 'video/mp4',
+            path: request.outputPath,
+          }
+        },
+      },
+      modelRuntime: {
+        generate: async (request) => ({
+          jobId: null,
+          outputs: [
+            {
+              contents: Buffer.from(request.adapter),
+              extension:
+                request.adapter === 'sora-video'
+                  ? '.mp4'
+                  : '.png',
+              mediaType:
+                request.adapter === 'sora-video'
+                  ? 'video/mp4'
+                  : 'image/png',
+            },
+          ],
+        }),
+      },
+      now: () => new Date('2026-08-20T14:00:00.000Z'),
+      reportBackgroundError: (error) => {
+        backgroundErrors.push(error)
+      },
+      structuredModelRuntime: {
+        generate: async () => {
+          planningCall += 1
+          return planningCall === 1
+            ? {value: oneSceneExplainerPlan()}
+            : recreatePlanGate
+        },
+      },
+    })
+    const context = {bin: 'mg', cwd, mediaGenHome}
+    await application.execute({type: 'init'}, context)
+    await application.execute(
+      {
+        endpoint:
+          'https://example.services.ai.azure.com/api/projects/media',
+        name: 'primary',
+        type: 'configure-foundry',
+      },
+      context,
+    )
+    await application.execute(
+      {
+        enabled: true,
+        id: 'explainer-video',
+        type: 'scenarios-set-enabled',
+      },
+      context,
+    )
+    await application.execute(
+      {
+        force: false,
+        request: {
+          creativeBrief: 'Explain retrieval-augmented generation.',
+          deploymentOverrides: {},
+          kind: 'scenario',
+          options: {
+            'aspect-ratio': '16:9',
+            duration: 20,
+            subtitles: true,
+            voice: {mode: 'off'},
+          },
+          preset: 'editorial-motion-graphics',
+          scenario: 'explainer-video',
+          sourcePaths: [],
+        },
+        type: 'create',
+      },
+      context,
+    )
+
+    const recreatePromise = application.execute(
+      {
+        background: true,
+        id: '01SOURCE',
+        type: 'generations-recreate',
+      },
+      context,
+    )
+    const immediateResult = await Promise.race([
+      recreatePromise,
+      new Promise<'blocked'>((resolve) =>
+        setTimeout(() => resolve('blocked'), 50),
+      ),
+    ])
+    releaseRecreatePlan()
+    const recreateResult = await recreatePromise
+
+    expect(immediateResult).not.toBe('blocked')
+    expect(recreateResult).toMatchObject({
+      generation: {
+        id: '01RECREATED',
+        status: 'created',
+      },
+      type: 'generations-recreate',
+    })
+    let completed = false
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await application.execute(
+        {id: '01RECREATED', type: 'generations-get'},
+        context,
+      )
+      if (
+        result.type === 'generations-get' &&
+        result.generation.status === 'succeeded'
+      ) {
+        completed = true
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(backgroundErrors).toEqual([])
+    expect(completed).toBe(true)
   })
 
   test('creates Explainer video and MAI Voice narration when Voice is selected', async () => {
@@ -524,8 +945,24 @@ describe('MediaGenApplication', () => {
       createWorkspaceId: () => '01WORKSPACE',
       foundryDiscovery: {
         listDeployments: async () => [
+          foundryDeployment('planner', 'gpt-4.1-mini'),
+          foundryDeployment('reference', 'MAI-Image-2.5'),
           foundryDeployment('sora', 'sora-2'),
         ],
+      },
+      imageNormalizer: testImageNormalizer(),
+      mediaComposer: {
+        compose: async (request) => {
+          await mkdir(join(request.outputPath, '..'), {
+            recursive: true,
+          })
+          await writeFile(request.outputPath, 'final explainer')
+          return {
+            durationSeconds: 20,
+            mediaType: 'video/mp4',
+            path: request.outputPath,
+          }
+        },
       },
       modelRuntime: {
         generate: async (request) => {
@@ -545,16 +982,29 @@ describe('MediaGenApplication', () => {
                     extension: '.mp3',
                     mediaType: 'audio/mpeg',
                   }
-                : {
-                    contents: Buffer.from('video'),
-                    extension: '.mp4',
-                    mediaType: 'video/mp4',
-                  },
+                : request.adapter === 'sora-video'
+                  ? {
+                      contents: Buffer.from('video'),
+                      extension: '.mp4',
+                      mediaType: 'video/mp4',
+                    }
+                  : {
+                      contents: Buffer.from('reference'),
+                      extension: '.png',
+                      mediaType: 'image/png',
+                    },
             ],
           }
         },
       },
       now: () => new Date('2026-08-18T12:00:00.000Z'),
+      structuredModelRuntime: {
+        generate: async () => ({
+          value: oneSceneExplainerPlan(
+            'Retrieval-augmented generation grounds answers in trusted sources.',
+          ),
+        }),
+      },
     })
     await application.execute(
       {type: 'init'},
@@ -564,7 +1014,7 @@ describe('MediaGenApplication', () => {
       {
         apiKey: 'private-speech-key',
         endpoint:
-          'https://speech-resource.cognitiveservices.azure.com/',
+          'https://eastus2.tts.speech.microsoft.com/',
         type: 'configure-speech',
         voice: 'en-US-Ethan:MAI-Voice-2',
       },
@@ -598,11 +1048,12 @@ describe('MediaGenApplication', () => {
             kind: 'scenario',
             options: {
               'aspect-ratio': '16:9',
-              duration: 12,
-              narration:
-                'Retrieval-augmented generation grounds answers in trusted sources.',
+              duration: 20,
               subtitles: true,
-              voice: 'en-US-Ethan:MAI-Voice-2',
+              voice: {
+                id: 'en-US-Ethan:MAI-Voice-2',
+                mode: 'selected',
+              },
             },
             preset: 'editorial-motion-graphics',
             scenario: 'explainer-video',
@@ -628,11 +1079,12 @@ describe('MediaGenApplication', () => {
             kind: 'scenario',
             options: {
               'aspect-ratio': '16:9',
-              duration: 12,
-              narration:
-                'Retrieval-augmented generation grounds answers in trusted sources.',
+              duration: 20,
               subtitles: true,
-              voice: 'en-US-Ethan:MAI-Voice-2',
+              voice: {
+                id: 'en-US-Ethan:MAI-Voice-2',
+                mode: 'selected',
+              },
             },
             preset: 'editorial-motion-graphics',
             scenario: 'explainer-video',
@@ -647,9 +1099,10 @@ describe('MediaGenApplication', () => {
         id: '01EXPLAINER',
         outputs: [
           {mediaType: 'video/mp4'},
-          {mediaType: 'audio/mpeg'},
         ],
         resolvedResources: [
+          {id: 'primary:planner', role: 'planning'},
+          {id: 'primary:reference', role: 'reference-image'},
           {id: 'primary:sora', role: 'visuals'},
           {id: 'local:speech', role: 'voice'},
         ],
@@ -658,22 +1111,169 @@ describe('MediaGenApplication', () => {
     })
     expect(requests).toEqual([
       {
-        adapter: 'sora-video',
+        adapter: 'mai-image',
         apiKeyConfigured: false,
         endpoint: undefined,
-        prompt: expect.stringContaining('visual explainer video'),
+        prompt: expect.stringContaining(
+          'Create one reusable visual style reference image',
+        ),
         voice: undefined,
       },
       {
         adapter: 'mai-voice',
         apiKeyConfigured: true,
         endpoint:
-          'https://speech-resource.cognitiveservices.azure.com/',
+          'https://eastus2.tts.speech.microsoft.com/',
         prompt:
           'Retrieval-augmented generation grounds answers in trusted sources.',
         voice: 'en-US-Ethan:MAI-Voice-2',
       },
+      {
+        adapter: 'sora-video',
+        apiKeyConfigured: false,
+        endpoint: undefined,
+        prompt: expect.stringContaining('STYLE REFERENCE'),
+        voice: undefined,
+      },
     ])
+  })
+
+  test('resumes a failed Explainer from its persisted workflow checkpoint', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'media-gen-explainer-resume-'),
+    )
+    temporaryDirectories.push(root)
+    const cwd = join(root, 'Project')
+    const mediaGenHome = join(root, 'home')
+    let planningCalls = 0
+    let imageCalls = 0
+    let videoCalls = 0
+    await mkdir(cwd)
+    const application = createMediaGenApplication({
+      createGenerationId: () => '01RESUME',
+      createWorkspaceId: () => '01WORKSPACE',
+      foundryDiscovery: {
+        listDeployments: async () => [
+          foundryDeployment('planner', 'gpt-4.1-mini'),
+          foundryDeployment('reference', 'MAI-Image-2.5'),
+          foundryDeployment('sora', 'sora-2'),
+        ],
+      },
+      imageNormalizer: testImageNormalizer(),
+      mediaComposer: {
+        compose: async (request) => {
+          await mkdir(join(request.outputPath, '..'), {
+            recursive: true,
+          })
+          await writeFile(request.outputPath, 'final explainer')
+          return {
+            durationSeconds: 20,
+            mediaType: 'video/mp4',
+            path: request.outputPath,
+          }
+        },
+      },
+      modelRuntime: {
+        generate: async (request) => {
+          if (request.adapter === 'mai-image') {
+            imageCalls += 1
+            return {
+              jobId: null,
+              outputs: [
+                {
+                  contents: Buffer.from('reference'),
+                  extension: '.png',
+                  mediaType: 'image/png',
+                },
+              ],
+            }
+          }
+          videoCalls += 1
+          if (videoCalls === 1) {
+            throw new Error('Temporary Sora failure')
+          }
+          return {
+            jobId: 'video-job',
+            outputs: [
+              {
+                contents: Buffer.from('video'),
+                extension: '.mp4',
+                mediaType: 'video/mp4',
+              },
+            ],
+          }
+        },
+      },
+      now: () => new Date('2026-08-19T20:00:00.000Z'),
+      structuredModelRuntime: {
+        generate: async () => {
+          planningCalls += 1
+          return {value: oneSceneExplainerPlan()}
+        },
+      },
+    })
+    await application.execute(
+      {type: 'init'},
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    await application.execute(
+      {
+        endpoint:
+          'https://example.services.ai.azure.com/api/projects/media',
+        name: 'primary',
+        type: 'configure-foundry',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    await application.execute(
+      {
+        enabled: true,
+        id: 'explainer-video',
+        type: 'scenarios-set-enabled',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+
+    await expect(
+      application.execute(
+        {
+          force: false,
+          request: {
+            creativeBrief: 'Explain retrieval-augmented generation.',
+            deploymentOverrides: {},
+            kind: 'scenario',
+            options: {
+              'aspect-ratio': '16:9',
+              duration: 20,
+              subtitles: true,
+              voice: {mode: 'off'},
+            },
+            preset: 'editorial-motion-graphics',
+            scenario: 'explainer-video',
+            sourcePaths: [],
+          },
+          type: 'create',
+        },
+        {bin: 'mg', cwd, mediaGenHome},
+      ),
+    ).rejects.toThrow('Temporary Sora failure')
+
+    await expect(
+      application.execute(
+        {id: '01RESUME', type: 'generations-resume'},
+        {bin: 'mg', cwd, mediaGenHome},
+      ),
+    ).resolves.toMatchObject({
+      generation: {
+        id: '01RESUME',
+        outputs: [{path: 'outputs/explainer.mp4'}],
+        status: 'succeeded',
+      },
+      type: 'generations-resume',
+    })
+    expect(planningCalls).toBe(1)
+    expect(imageCalls).toBe(1)
+    expect(videoCalls).toBe(2)
   })
 
   test('recreates a Scenario with its Preset, options, sources, and lineage', async () => {
@@ -762,6 +1362,16 @@ describe('MediaGenApplication', () => {
       },
       {bin: 'mg', cwd, mediaGenHome},
     )
+
+    await expect(
+      application.execute(
+        {id: '01SOURCE', type: 'generations-get'},
+        {bin: 'mg', cwd, mediaGenHome},
+      ),
+    ).resolves.toMatchObject({
+      referenceStates: [{path: sourcePath, state: 'present'}],
+      type: 'generations-get',
+    })
 
     await expect(
       application.execute(
@@ -1133,6 +1743,71 @@ describe('MediaGenApplication', () => {
     })
   })
 
+  test('keeps internal workflow models out of Scenario routing settings', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'media-gen-workflow-routing-'),
+    )
+    temporaryDirectories.push(root)
+    const cwd = join(root, 'Project')
+    const mediaGenHome = join(root, 'home')
+    await mkdir(cwd)
+    let discovered = [
+      foundryDeployment('planner', 'gpt-4.1-mini'),
+    ]
+    const application = createMediaGenApplication({
+      createWorkspaceId: () => '01WORKSPACE',
+      foundryDiscovery: {
+        listDeployments: async () => discovered,
+      },
+    })
+    await application.execute(
+      {type: 'init'},
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    await application.execute(
+      {
+        endpoint:
+          'https://planning.services.ai.azure.com/api/projects/media',
+        name: 'planning',
+        type: 'configure-foundry',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    discovered = [
+      foundryDeployment('reference', 'MAI-Image-2.5'),
+    ]
+    await application.execute(
+      {
+        endpoint:
+          'https://images.services.ai.azure.com/api/projects/media',
+        name: 'images',
+        type: 'configure-foundry',
+      },
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+
+    await expect(
+      readJson(join(cwd, '.mg', 'config.json')),
+    ).resolves.toMatchObject({
+      deployments: {
+        'images:reference': {
+          model: 'MAI-Image-2.5',
+        },
+        'planning:planner': {
+          model: 'gpt-4.1-mini',
+        },
+      },
+      routing: {
+        generators: {
+          image: {
+            auto: ['images:reference'],
+          },
+        },
+        scenarios: {},
+      },
+    })
+  })
+
   test('returns non-secret workspace settings and authentication status', async () => {
     const root = await mkdtemp(join(tmpdir(), 'media-gen-settings-'))
     temporaryDirectories.push(root)
@@ -1152,19 +1827,37 @@ describe('MediaGenApplication', () => {
       {bin: 'mg', cwd, mediaGenHome},
     )
 
-    await expect(
-      application.execute(
-        {type: 'settings-get'},
-        {bin: 'mg', cwd, mediaGenHome},
-      ),
-    ).resolves.toMatchObject({
+    const result = await application.execute(
+      {type: 'settings-get'},
+      {bin: 'mg', cwd, mediaGenHome},
+    )
+    expect(result).toMatchObject({
       auth: {state: 'signed-out'},
+      catalog: {
+        videoModels: [
+          {
+            explainerDurationPresetsSeconds: [
+              20, 40, 60, 180, 300, 600,
+            ],
+            model: 'sora-2',
+          },
+        ],
+        voices: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'en-US-Ethan:MAI-Voice-2',
+            model: 'MAI-Voice-2',
+          }),
+        ]),
+      },
       manifest: {
         providers: {},
         schemaVersion: 2,
       },
       type: 'settings-get',
     })
+    expect(JSON.stringify(result)).not.toContain(
+      'loose confident black ink pen-and-marker',
+    )
   })
 
   test('uses a manually selected Eligible Model deployment', async () => {
@@ -1407,6 +2100,7 @@ describe('MediaGenApplication', () => {
     )
     await application.execute(
       {
+        controls: {height: 864, quality: 'high', width: 1536},
         creativeBrief: 'Original brief.',
         mediaType: 'image',
         referencePaths: [],
@@ -1427,6 +2121,7 @@ describe('MediaGenApplication', () => {
 
     expect(result).toMatchObject({
       generation: {
+        controls: {height: 864, quality: 'high', width: 1536},
         creativeBrief: 'Make the background darker.',
         id: '01EDITED',
         references: [
@@ -1485,6 +2180,7 @@ describe('MediaGenApplication', () => {
     )
     await application.execute(
       {
+        controls: {height: 864, quality: 'high', width: 1536},
         creativeBrief: 'Original brief.',
         mediaType: 'image',
         referencePaths: [],
@@ -1506,6 +2202,7 @@ describe('MediaGenApplication', () => {
 
     expect(result).toMatchObject({
       generation: {
+        controls: {height: 864, quality: 'high', width: 1536},
         creativeBrief: 'Updated brief.',
         id: '01RECREATED',
         selection: {style: 'cinematic'},
@@ -1873,6 +2570,7 @@ describe('MediaGenApplication', () => {
     await mkdir(cwd)
     const foundryDiscovery: FoundryDiscovery = {
       listDeployments: async () => [
+        foundryDeployment('planner', 'gpt-4.1-mini'),
         foundryDeployment('mai-fast', 'MAI-Image-2.5-Flash'),
         foundryDeployment('voice', 'MAI-Voice-2'),
         foundryDeployment('sora', 'sora-2'),
@@ -1901,6 +2599,13 @@ describe('MediaGenApplication', () => {
 
     expect(result).toEqual({
       deployments: [
+        {
+          adapter: 'azure-openai-chat',
+          deploymentName: 'planner',
+          id: 'primary:planner',
+          mediaType: 'text',
+          model: 'gpt-4.1-mini',
+        },
         {
           adapter: 'mai-image',
           deploymentName: 'mai-fast',
@@ -1936,6 +2641,12 @@ describe('MediaGenApplication', () => {
       readJson(join(cwd, '.mg', 'config.json')),
     ).resolves.toMatchObject({
       deployments: {
+        'primary:planner': {
+          adapter: 'azure-openai-chat',
+          deploymentName: 'planner',
+          model: 'gpt-4.1-mini',
+          provider: 'primary',
+        },
         'primary:mai-fast': {
           adapter: 'mai-image',
           deploymentName: 'mai-fast',
@@ -2203,7 +2914,7 @@ describe('MediaGenApplication', () => {
     })
   })
 
-  test('treats an Explainer without Speech as ready because Voice is optional', async () => {
+  test('reports missing Speech when default Explainer Voice is Auto', async () => {
     const root = await mkdtemp(
       join(tmpdir(), 'media-gen-speech-doctor-'),
     )
@@ -2228,6 +2939,8 @@ describe('MediaGenApplication', () => {
       createWorkspaceId: () => '01WORKSPACE',
       foundryDiscovery: {
         listDeployments: async () => [
+          foundryDeployment('planner', 'gpt-4.1-mini'),
+          foundryDeployment('reference', 'MAI-Image-2.5'),
           foundryDeployment('sora', 'sora-2'),
         ],
       },
@@ -2262,13 +2975,16 @@ describe('MediaGenApplication', () => {
     ).resolves.toMatchObject({
       checks: expect.arrayContaining([
         {
-          detail: 'visuals: primary:sora',
+          detail:
+            'Missing private Azure Speech configuration for role "voice"',
           name: 'scenario:explainer-video',
-          status: 'pass',
+          status: 'fail',
         },
       ]),
-      help: [],
-      state: 'healthy',
+      help: [
+        'Configure Azure Speech in Settings or run `mg configure speech --help`.',
+      ],
+      state: 'unhealthy',
       type: 'doctor',
     })
   })
@@ -2592,6 +3308,40 @@ describe('MediaGenApplication', () => {
         capacity: 1,
         name: 'GlobalStandard',
         tier: 'Standard',
+      },
+    }
+  }
+
+  function oneSceneExplainerPlan(
+    narration = 'Explain the topic.',
+  ) {
+    return {
+      scenes: [
+        {
+          ambientAudio: 'Soft paper sounds.',
+          durationSeconds: 20,
+          id: 'scene-1',
+          motion: 'Slow push in.',
+          narration,
+          negative: 'No freeze frame.',
+          scene: 'A concise hand-drawn explanation.',
+        },
+      ],
+      title: 'Explainer',
+      visualBible: 'Consistent editorial illustration.',
+    }
+  }
+
+  function testImageNormalizer() {
+    return {
+      normalize: async (request: {
+        inputPath: string
+        outputPath: string
+      }) => {
+        await writeFile(
+          request.outputPath,
+          await readFile(request.inputPath),
+        )
       },
     }
   }

@@ -94,6 +94,7 @@ export function createGenerationModule(
         }
       }
       const record = await dependencies.store.create({
+        controls: input.controls,
         creativeBrief: input.creativeBrief,
         mediaType: input.mediaType,
         operations: input.operations,

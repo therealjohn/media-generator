@@ -103,10 +103,10 @@ describe('Local UI', () => {
 
     const model = await screen.findByRole('combobox', {name: 'Model'})
     expect(
-      screen.getByRole('combobox', {name: 'Style'}).getAttribute(
-        'data-slot',
-      ),
-    ).toBe('native-select')
+      screen
+        .getByRole('button', {name: /Minimal studio/})
+        .getAttribute('data-slot'),
+    ).toBe('button')
     const aspectRatio = screen.getByRole('combobox', {
       name: 'Aspect ratio',
     })
@@ -120,7 +120,7 @@ describe('Local UI', () => {
       ),
     ).toBe('true')
     expect(
-      screen.getByRole('button', {name: 'Image'}).getAttribute(
+      screen.getByRole('button', {name: /Image/}).getAttribute(
         'data-slot',
       ),
     ).toBe('button')
@@ -134,7 +134,7 @@ describe('Local UI', () => {
     ).toBe('checkbox')
   })
 
-  test('uses a one-second capped duration slider for video', async () => {
+  test('uses model-supported duration choices for video', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(jsonResponse(settingsResult())),
@@ -143,18 +143,20 @@ describe('Local UI', () => {
 
     renderApp('/create')
 
-    await user.click(screen.getByRole('button', {name: 'Video'}))
+    await user.click(screen.getByRole('button', {name: /Video/}))
 
-    const duration = screen.getByRole('slider', {name: 'Duration'})
-    expect(duration.getAttribute('aria-valuemin')).toBe('5')
-    expect(duration.getAttribute('aria-valuemax')).toBe('12')
-    expect(duration.getAttribute('aria-valuenow')).toBe('5')
+    const duration = screen.getByRole('combobox', {name: 'Duration'})
+    expect((duration as HTMLSelectElement).value).toBe('8')
+    expect(
+      within(duration).getByRole('option', {name: '4 seconds'}),
+    ).not.toBeNull()
+    expect(
+      within(duration).getByRole('option', {name: '20 seconds'}),
+    ).not.toBeNull()
 
-    await user.click(duration)
-    await user.keyboard('{End}{ArrowRight}')
+    await user.selectOptions(duration, '20')
 
-    expect(duration.getAttribute('aria-valuenow')).toBe('12')
-    expect(screen.getByText('12 seconds')).not.toBeNull()
+    expect((duration as HTMLSelectElement).value).toBe('20')
   })
 
   test('opens a reference picker with local and Generation sources', async () => {
@@ -196,9 +198,17 @@ describe('Local UI', () => {
         name: 'Video Generations',
       }),
     ).not.toBeNull()
+    expect(
+      within(picker).getByRole('button', {name: 'Browse files'}),
+    ).not.toBeNull()
+    expect(
+      within(picker).queryByRole('textbox', {
+        name: 'Reference paths',
+      }),
+    ).toBeNull()
   })
 
-  test('adds pasted Markdown as a Text Reference', async () => {
+  test('adds pasted text without asking for a title or format', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) =>
@@ -225,31 +235,107 @@ describe('Local UI', () => {
     await user.click(
       within(picker).getByRole('tab', {name: 'Text'}),
     )
+    expect(
+      within(picker).queryByRole('textbox', {name: 'Title'}),
+    ).toBeNull()
+    expect(
+      within(picker).queryByRole('combobox', {name: 'Format'}),
+    ).toBeNull()
+    expect(within(picker).queryByText('Markdown')).toBeNull()
     await user.type(
-      within(picker).getByRole('textbox', {name: 'Title'}),
-      'Product documentation',
-    )
-    await user.type(
-      within(picker).getByRole('textbox', {
-        name: 'Text or Markdown content',
-      }),
+      within(picker).getByRole('textbox', {name: 'Text'}),
       '# Product setup{enter}{enter}Connect the SDK.',
     )
     await user.click(
       within(picker).getByRole('button', {
-        name: 'Add Text Reference',
+        name: 'Add text',
       }),
     )
     await user.click(
       within(picker).getByRole('button', {name: 'Close'}),
     )
 
-    expect(screen.getByText('Product documentation')).not.toBeNull()
+    expect(screen.getByText('Product setup')).not.toBeNull()
     expect(
       screen.getByRole('button', {
-        name: 'Remove Text Reference Product documentation',
+        name: 'Remove text reference Product setup',
       }),
     ).not.toBeNull()
+  })
+
+  test('browses local files and previews images and generic files', async () => {
+    const fetchFake = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === '/api/settings') {
+          return Promise.resolve(jsonResponse(settingsResult()))
+        }
+        if (path === '/api/generations' && init?.method === 'GET') {
+          return Promise.resolve(
+            jsonResponse({
+              count: 0,
+              generations: [],
+              type: 'generations-list',
+            }),
+          )
+        }
+        if (
+          path === '/api/reference-files/browse' &&
+          init?.method === 'POST'
+        ) {
+          return Promise.resolve(
+            jsonResponse({
+              files: [
+                {
+                  mediaType: 'image/png',
+                  name: 'product.png',
+                  path: 'C:\\assets\\product.png',
+                  previewUrl:
+                    '/api/reference-files/previews/image-token',
+                },
+                {
+                  mediaType: 'application/pdf',
+                  name: 'brand-guide.pdf',
+                  path: 'C:\\assets\\brand-guide.pdf',
+                },
+              ],
+              type: 'reference-files-browse',
+            }),
+          )
+        }
+        throw new Error(`Unexpected request: ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchFake)
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      screen.getByRole('button', {name: 'Add references'}),
+    )
+    const picker = await screen.findByRole('dialog', {
+      name: 'Add references',
+    })
+    await user.click(
+      within(picker).getByRole('button', {name: 'Browse files'}),
+    )
+
+    const image = within(picker).getByRole('img', {
+      name: 'Reference product.png',
+    })
+    expect(image.getAttribute('src')).toBe(
+      '/api/reference-files/previews/image-token',
+    )
+    expect(within(picker).getByText('brand-guide')).not.toBeNull()
+    expect(within(picker).getByText('PDF')).not.toBeNull()
+    expect(fetchFake).toHaveBeenCalledWith(
+      '/api/reference-files/browse',
+      {
+        body: JSON.stringify({purpose: 'references'}),
+        headers: {'Content-Type': 'application/json'},
+        method: 'POST',
+      },
+    )
   })
 
   test('adds a prior Generation from the reference picker', async () => {
@@ -454,7 +540,7 @@ describe('Local UI', () => {
     })
   })
 
-  test('opens Create as a prompt-first workbench', () => {
+  test('opens Image as a prompt-first workbench', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(jsonResponse(settingsResult())),
@@ -463,7 +549,7 @@ describe('Local UI', () => {
 
     expect(
       screen.getByRole('heading', {
-        name: 'What are you trying to make?',
+        name: 'Image',
       }),
     ).not.toBeNull()
     expect(
@@ -490,21 +576,24 @@ describe('Local UI', () => {
       within(createNavigation).queryByText('Product marketing video'),
     ).toBeNull()
 
+    expect(screen.queryByRole('group', {name: 'Media type'})).toBeNull()
     expect(
-      screen.getByRole('group', {name: 'Media type'}),
-    ).not.toBeNull()
-    const style = screen.getByRole('combobox', {name: 'Style'})
-    expect(style).not.toBeNull()
-    expect(
-      within(style).getByRole('option', {name: 'Minimal studio'}),
-    ).not.toBeNull()
-    expect(
-      within(style).getByRole('option', {
-        name: 'Editorial illustration',
+      screen.getByRole('button', {
+        name: /Minimal studio.*Clean lighting/,
       }),
     ).not.toBeNull()
     expect(
-      screen.getByRole('button', {name: 'Add references'}),
+      screen.getByRole('button', {
+        name: /Editorial illustration.*Conceptual editorial/,
+      }),
+    ).not.toBeNull()
+    const brief = screen.getByRole('textbox', {name: 'Creative Brief'})
+    const promptCard = brief.closest<HTMLElement>('[data-slot="card"]')
+    expect(promptCard).not.toBeNull()
+    expect(
+      within(promptCard!).getByRole('button', {
+        name: 'Add references',
+      }),
     ).not.toBeNull()
     expect(
       screen.getByRole('combobox', {name: 'Model'}),
@@ -515,6 +604,39 @@ describe('Local UI', () => {
 
     const advanced = screen.getByText('Advanced')
     expect(advanced.closest('details')?.open).toBe(false)
+  })
+
+  test('carries the prompt and Style card UX into Video', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(settingsResult())),
+    )
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(screen.getByRole('button', {name: /Video/}))
+
+    expect(
+      screen.getByRole('heading', {name: 'Video'}),
+    ).not.toBeNull()
+    expect(
+      screen.getByRole('button', {
+        name: /Handheld UGC.*Informal handheld/,
+      }),
+    ).not.toBeNull()
+    const brief = screen.getByRole('textbox', {name: 'Creative Brief'})
+    expect(
+      within(brief.closest('[data-slot="card"]')!).getByRole(
+        'button',
+        {name: 'Add references'},
+      ),
+    ).not.toBeNull()
+    expect(
+      screen.getByRole('combobox', {name: 'Model'}),
+    ).not.toBeNull()
+    expect(
+      screen.getByRole('combobox', {name: 'Duration'}),
+    ).not.toBeNull()
   })
 
   test('shows built-in Scenarios below the general Generators', async () => {
@@ -586,35 +708,43 @@ describe('Local UI', () => {
       }),
     ).not.toBeNull()
     expect(
-      screen.getByRole('combobox', {name: 'Voice (optional)'}),
+      screen.getByRole('combobox', {name: 'Voice'}),
     ).not.toBeNull()
     expect(
-      screen.getByRole('option', {
-        name: 'No voice',
-      }),
+      screen.getByRole('option', {name: 'Off'}),
     ).not.toBeNull()
-    expect(screen.getByText('Azure Speech configured')).not.toBeNull()
+    expect(
+      screen.queryByRole('option', {name: /Auto.*Ethan/i}),
+    ).toBeNull()
+    expect(screen.queryByText('Narration provider')).toBeNull()
+    expect(screen.queryByText('Azure Speech configured')).toBeNull()
     expect(
       (
         screen.getByRole('combobox', {
-          name: 'Voice (optional)',
+          name: 'Voice',
         }) as HTMLSelectElement
       ).value,
-    ).toBe('none')
+    ).toBe('en-US-Ethan:MAI-Voice-2')
     expect(
       screen.queryByRole('textbox', {name: 'Narration script'}),
     ).toBeNull()
     await user.selectOptions(
-      screen.getByRole('combobox', {name: 'Voice (optional)'}),
-      'en-US-Ethan:MAI-Voice-2',
+      screen.getByRole('combobox', {name: 'Voice'}),
+      'off',
     )
-    expect(
-      screen.getByRole('textbox', {name: 'Narration script'}),
-    ).not.toBeNull()
     expect(
       screen.getByRole('checkbox', {name: 'Subtitles'}),
     ).not.toBeNull()
-    expect(screen.getByRole('slider', {name: 'Duration'})).not.toBeNull()
+    expect(
+      screen.getByRole('combobox', {name: 'Duration'}),
+    ).not.toBeNull()
+    await user.click(screen.getByText('Advanced'))
+    const videoModel = screen.getByRole('combobox', {
+      name: 'Video model',
+    })
+    expect(
+      within(videoModel).getByRole('option', {name: 'Auto'}),
+    ).not.toBeNull()
     expect(
       screen.getByRole('combobox', {name: 'Aspect ratio'}),
     ).not.toBeNull()
@@ -624,6 +754,265 @@ describe('Local UI', () => {
     expect(
       screen.queryByRole('combobox', {name: 'Style'}),
     ).toBeNull()
+    expect(
+      screen.queryByRole('heading', {name: 'Source material'}),
+    ).toBeNull()
+    expect(
+      screen.getByRole('button', {name: 'Add references'}),
+    ).not.toBeNull()
+  })
+
+  test('offers model-derived Explainer durations and a manual slider', async () => {
+    const settings = settingsResult()
+    settings.scenarios[0]!.enabled = true
+    settings.manifest.scenarios.enabled = ['explainer-video']
+    settings.manifest.routing.scenarios = {
+      'explainer-video': {
+        visuals: {auto: ['primary:sora']},
+      },
+    }
+    settings.speech = {
+      configured: true,
+      defaultVoice: 'en-US-Ethan:MAI-Voice-2',
+      endpoint:
+        'https://speech-resource.cognitiveservices.azure.com/',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(settings)),
+    )
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      await screen.findByRole('button', {
+        name: /Explainer video/,
+      }),
+    )
+
+    const duration = screen.getByRole('combobox', {
+      name: 'Duration',
+    })
+    expect(
+      within(duration).getByRole('option', {name: '20 seconds'}),
+    ).not.toBeNull()
+    expect(
+      within(duration).getByRole('option', {name: '1 minute'}),
+    ).not.toBeNull()
+    expect(
+      within(duration).getByRole('option', {name: '10 minutes'}),
+    ).not.toBeNull()
+    expect((duration as HTMLSelectElement).value).toBe('60')
+    expect(
+      screen.queryByRole('slider', {name: 'Manual duration'}),
+    ).toBeNull()
+
+    await user.selectOptions(duration, 'manual')
+
+    const manual = screen.getByRole('slider', {
+      name: 'Manual duration',
+    })
+    expect(manual.getAttribute('aria-valuemin')).toBe('15')
+    expect(manual.getAttribute('aria-valuemax')).toBe('600')
+  })
+
+  test('allows Voice Off when Speech is not configured', async () => {
+    const settings = settingsResult()
+    settings.scenarios[0]!.enabled = true
+    settings.scenarios[0]!.readiness = {
+      missingRoles: ['voice'],
+      state: 'not-ready',
+    }
+    settings.manifest.scenarios.enabled = ['explainer-video']
+    settings.manifest.routing.scenarios = {
+      'explainer-video': {
+        planning: {auto: ['primary:planner']},
+        'reference-image': {auto: ['primary:mai-fast']},
+        visuals: {auto: ['primary:sora']},
+      },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(settings)),
+    )
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      await screen.findByRole('button', {
+        name: /Explainer video/,
+      }),
+    )
+
+    const create = screen.getByRole('button', {
+      name: 'Create Explainer video',
+    }) as HTMLButtonElement
+    expect(create.disabled).toBe(false)
+    expect(
+      (
+        screen.getByRole('combobox', {
+          name: 'Voice',
+        }) as HTMLSelectElement
+      ).value,
+    ).toBe('off')
+    expect(
+      screen.queryByText(/Missing setup: voice/),
+    ).toBeNull()
+  })
+
+  test('does not expose generated workflow references as Scenario setup', async () => {
+    const settings = settingsResult()
+    settings.scenarios[0]!.enabled = true
+    settings.scenarios[0]!.readiness = {
+      missingRoles: ['planning', 'reference-image'],
+      state: 'not-ready',
+    }
+    settings.manifest.deployments['primary:planner'] = {
+      adapter: 'azure-openai-chat',
+      deploymentName: 'planner',
+      model: 'gpt-4.1-mini',
+      provider: 'primary',
+    }
+    settings.manifest.scenarios.enabled = ['explainer-video']
+    settings.manifest.routing.scenarios = {
+      'explainer-video': {
+        visuals: {auto: ['primary:sora']},
+      },
+    }
+    settings.speech = {
+      configured: true,
+      defaultVoice: 'en-US-Ethan:MAI-Voice-2',
+      endpoint:
+        'https://speech-resource.cognitiveservices.azure.com/',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(settings)),
+    )
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      await screen.findByRole('button', {
+        name: /Explainer video/,
+      }),
+    )
+
+    expect(
+      screen.queryByText(/planning, reference-image/),
+    ).toBeNull()
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Create Explainer video',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false)
+    expect(
+      screen.getByRole('button', {name: 'Add references'}),
+    ).not.toBeNull()
+  })
+
+  test('accepts multiple user Reference Assets for an Explainer', async () => {
+    const settings = settingsResult()
+    settings.scenarios[0]!.enabled = true
+    settings.manifest.scenarios.enabled = ['explainer-video']
+    settings.manifest.routing.scenarios = {
+      'explainer-video': {
+        visuals: {auto: ['primary:sora']},
+      },
+    }
+    settings.speech = {
+      configured: true,
+      defaultVoice: 'en-US-Ethan:MAI-Voice-2',
+      endpoint:
+        'https://speech-resource.cognitiveservices.azure.com/',
+    }
+    const fetchFake = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === '/api/settings') {
+          return jsonResponse(settings)
+        }
+        if (
+          path === '/api/reference-files/browse' &&
+          init?.method === 'POST'
+        ) {
+          return jsonResponse({
+            files: [
+              {
+                mediaType: 'image/png',
+                name: 'style.png',
+                path: 'C:\\assets\\style.png',
+                previewUrl:
+                  '/api/reference-files/previews/style-token',
+              },
+              {
+                mediaType: 'image/png',
+                name: 'product.png',
+                path: 'C:\\assets\\product.png',
+                previewUrl:
+                  '/api/reference-files/previews/product-token',
+              },
+            ],
+            type: 'reference-files-browse',
+          })
+        }
+        if (path === '/api/create' && init?.method === 'POST') {
+          return jsonResponse({
+            generation: generationRecord({
+              id: '01EXPLAINER',
+              mediaType: 'video',
+              status: 'created',
+            }),
+            type: 'create',
+          })
+        }
+        throw new Error(`Unexpected request: ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchFake)
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      await screen.findByRole('button', {
+        name: /Explainer video/,
+      }),
+    )
+    await user.type(
+      screen.getByRole('textbox', {
+        name: 'What should the video explain?',
+      }),
+      'Explain the product.',
+    )
+    await user.click(
+      screen.getByRole('button', {name: 'Add references'}),
+    )
+    const picker = await screen.findByRole('dialog', {
+      name: 'Add references',
+    })
+    await user.click(
+      within(picker).getByRole('button', {name: 'Browse files'}),
+    )
+    await user.click(
+      within(picker).getByRole('button', {name: 'Close'}),
+    )
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Create Explainer video',
+      }),
+    )
+
+    const [, createInit] = fetchFake.mock.calls.find(
+      ([path]) => String(path) === '/api/create',
+    )!
+    expect(
+      JSON.parse(String(createInit?.body)).request.sourcePaths,
+    ).toEqual([
+      'C:\\assets\\style.png',
+      'C:\\assets\\product.png',
+    ])
   })
 
   test('moves a prominent highlight between selected Presets', async () => {
@@ -635,6 +1024,7 @@ describe('Local UI', () => {
       id: 'stickman-cartoon',
       title: 'Stickman cartoon',
     })
+
     settings.manifest.scenarios.enabled = ['explainer-video']
     settings.manifest.routing.scenarios = {
       'explainer-video': {
@@ -678,6 +1068,44 @@ describe('Local UI', () => {
     expect(stickman.className).toContain('ring-2')
   })
 
+  test('shows end-user Preset copy instead of Model Prompt guidance', async () => {
+    const settings = settingsResult()
+    settings.scenarios[0]!.enabled = true
+    settings.scenarios[0]!.presets.push({
+      description:
+        'Loose ink illustration with paper texture and animated line work.',
+      id: 'hand-drawn',
+      title: 'Hand drawn',
+    })
+    settings.manifest.scenarios.enabled = ['explainer-video']
+    settings.manifest.routing.scenarios = {
+      'explainer-video': {
+        visuals: {auto: ['primary:sora']},
+      },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(settings)),
+    )
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      await screen.findByRole('button', {
+        name: /Explainer video/,
+      }),
+    )
+
+    expect(
+      screen.getByRole('button', {
+        name: /Hand drawn.*Loose ink illustration/,
+      }),
+    ).not.toBeNull()
+    expect(
+      screen.queryByText(/clean off-white paper/),
+    ).toBeNull()
+  })
+
   test('opens a purpose-built Short-form video workbench', async () => {
     const settings = settingsResult()
     settings.scenarios[1]!.enabled = true
@@ -703,9 +1131,11 @@ describe('Local UI', () => {
     expect(
       screen.getByRole('heading', {name: 'Short-form video'}),
     ).not.toBeNull()
-    expect(screen.getByText('Source video')).not.toBeNull()
     expect(
-      screen.getByRole('button', {name: 'Add references'}),
+      screen.getByRole('button', {name: 'Choose source video'}),
+    ).not.toBeNull()
+    expect(
+      screen.getByRole('button', {name: 'Add context'}),
     ).not.toBeNull()
     expect(
       screen.getByRole('textbox', {name: 'Direction'}),
@@ -723,14 +1153,155 @@ describe('Local UI', () => {
       screen.getByRole('combobox', {name: 'Clip count'}),
     ).not.toBeNull()
     expect(
-      screen.getByRole('slider', {name: 'Clip duration'}),
+      screen.getByRole('combobox', {name: 'Clip duration'}),
+    ).not.toBeNull()
+    expect(
+      screen.getByRole('group', {name: 'Layout'}),
+    ).not.toBeNull()
+    expect(
+      screen.getByRole('group', {name: 'Clips'}),
     ).not.toBeNull()
     expect(
       screen.getByRole('button', {name: 'Create Short-form video'}),
     ).not.toBeNull()
+
+    await user.click(
+      screen.getByRole('button', {name: 'Choose source video'}),
+    )
+    const sourcePicker = await screen.findByRole('dialog', {
+      name: 'Add source video',
+    })
+    expect(
+      within(sourcePicker).getByRole('tab', {name: 'Local files'}),
+    ).not.toBeNull()
+    expect(
+      within(sourcePicker).getByRole('tab', {
+        name: 'Video Generations',
+      }),
+    ).not.toBeNull()
+    expect(
+      within(sourcePicker).queryByRole('tab', {name: 'Text'}),
+    ).toBeNull()
+    expect(
+      within(sourcePicker).queryByRole('tab', {
+        name: 'Image Generations',
+      }),
+    ).toBeNull()
+    await user.click(
+      within(sourcePicker).getByRole('button', {name: 'Close'}),
+    )
+
+    await user.click(
+      screen.getByRole('button', {name: 'Add context'}),
+    )
+    const contextPicker = await screen.findByRole('dialog', {
+      name: 'Add context',
+    })
+    expect(
+      within(contextPicker).getByRole('tab', {name: 'Text'}),
+    ).not.toBeNull()
+    expect(
+      within(contextPicker).queryByRole('tab', {name: 'Local files'}),
+    ).toBeNull()
   })
 
-  test('submits an Explainer video with Voice disabled by default', async () => {
+  test('does not silently truncate a multi-output source Generation', async () => {
+    const settings = settingsResult()
+    settings.scenarios[1]!.enabled = true
+    settings.manifest.scenarios.enabled = ['short-form-video']
+    settings.manifest.routing.scenarios = {
+      'short-form-video': {
+        video: {auto: ['primary:sora']},
+      },
+    }
+    const fetchFake = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path === '/api/settings') {
+          return Promise.resolve(jsonResponse(settings))
+        }
+        if (path === '/api/generations' && init?.method === 'GET') {
+          return Promise.resolve(
+            jsonResponse({
+              count: 1,
+              generations: [
+                generationRecord({
+                  id: '01MULTI',
+                  mediaType: 'video',
+                  outputs: [
+                    {
+                      mediaType: 'video/mp4',
+                      path: 'outputs/clip-1.mp4',
+                      sha256: 'first',
+                      size: 100,
+                    },
+                    {
+                      mediaType: 'video/mp4',
+                      path: 'outputs/clip-2.mp4',
+                      sha256: 'second',
+                      size: 100,
+                    },
+                  ],
+                }),
+              ],
+              type: 'generations-list',
+            }),
+          )
+        }
+        if (path === '/api/references' && init?.method === 'POST') {
+          return Promise.resolve(
+            jsonResponse({
+              references: [
+                {
+                  generationId: '01MULTI',
+                  mediaType: 'video/mp4',
+                  path: 'C:\\media\\01MULTI\\clip-1.mp4',
+                },
+                {
+                  generationId: '01MULTI',
+                  mediaType: 'video/mp4',
+                  path: 'C:\\media\\01MULTI\\clip-2.mp4',
+                },
+              ],
+              type: 'generations-reference',
+            }),
+          )
+        }
+        throw new Error(`Unexpected request: ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchFake)
+    const user = userEvent.setup()
+
+    renderApp('/create')
+    await user.click(
+      await screen.findByRole('button', {name: /Short-form video/}),
+    )
+    await user.click(
+      screen.getByRole('button', {name: 'Choose source video'}),
+    )
+    const picker = await screen.findByRole('dialog', {
+      name: 'Add source video',
+    })
+    await user.click(
+      within(picker).getByRole('tab', {
+        name: 'Video Generations',
+      }),
+    )
+    await user.click(
+      await within(picker).findByRole('button', {
+        name: 'Use Generation 01MULTI',
+      }),
+    )
+
+    expect(
+      await within(picker).findByRole('alert', {
+        name: 'Choose one video output',
+      }),
+    ).not.toBeNull()
+  })
+
+  test('submits an Explainer video with the configured Voice by default', async () => {
     const settings = settingsResult()
     settings.scenarios[0]!.enabled = true
     settings.manifest.scenarios.enabled = ['explainer-video']
@@ -763,6 +1334,7 @@ describe('Local UI', () => {
             generation: generationRecord({
               id: '01EXPLAINER',
               mediaType: 'video',
+              status: 'created',
             }),
             type: 'create',
           })
@@ -795,18 +1367,12 @@ describe('Local UI', () => {
       within(picker).getByRole('tab', {name: 'Text'}),
     )
     await user.type(
-      within(picker).getByRole('textbox', {name: 'Title'}),
-      'Product documentation',
-    )
-    await user.type(
-      within(picker).getByRole('textbox', {
-        name: 'Text or Markdown content',
-      }),
+      within(picker).getByRole('textbox', {name: 'Text'}),
       '# Product setup{enter}{enter}Connect the SDK.',
     )
     await user.click(
       within(picker).getByRole('button', {
-        name: 'Add Text Reference',
+        name: 'Add text',
       }),
     )
     await user.click(
@@ -827,8 +1393,12 @@ describe('Local UI', () => {
         kind: 'scenario',
         options: {
           'aspect-ratio': '16:9',
-          duration: 12,
+          duration: 60,
           subtitles: true,
+          voice: {
+            id: 'en-US-Harper:MAI-Voice-2',
+            mode: 'selected',
+          },
         },
         preset: 'editorial-motion-graphics',
         scenario: 'explainer-video',
@@ -836,12 +1406,16 @@ describe('Local UI', () => {
         textReferences: [
           {
             content: '# Product setup\n\nConnect the SDK.',
-            format: 'markdown',
-            title: 'Product documentation',
+            format: 'text',
           },
         ],
       },
     })
+    expect(
+      screen.getByRole('heading', {name: 'Generation in progress'}),
+    ).not.toBeNull()
+    expect(screen.getByText('In progress')).not.toBeNull()
+    expect(screen.queryByText('Success')).toBeNull()
   })
 
   test('submits a Short-form video Scenario request', async () => {
@@ -866,6 +1440,21 @@ describe('Local UI', () => {
             type: 'generations-list',
           })
         }
+        if (
+          path === '/api/reference-files/browse' &&
+          init?.method === 'POST'
+        ) {
+          return jsonResponse({
+            files: [
+              {
+                mediaType: 'video/mp4',
+                name: 'interview.mp4',
+                path: 'C:\\media\\interview.mp4',
+              },
+            ],
+            type: 'reference-files-browse',
+          })
+        }
         if (path === '/api/create' && init?.method === 'POST') {
           return jsonResponse({
             generation: generationRecord({
@@ -888,19 +1477,13 @@ describe('Local UI', () => {
       }),
     )
     await user.click(
-      screen.getByRole('button', {name: 'Add references'}),
+      screen.getByRole('button', {name: 'Choose source video'}),
     )
     const picker = await screen.findByRole('dialog', {
-      name: 'Add references',
+      name: 'Add source video',
     })
-    await user.type(
-      within(picker).getByRole('textbox', {
-        name: 'Reference paths',
-      }),
-      'C:\\media\\interview.mp4',
-    )
     await user.click(
-      within(picker).getByRole('button', {name: 'Add paths'}),
+      within(picker).getByRole('button', {name: 'Browse files'}),
     )
     await user.click(
       within(picker).getByRole('button', {name: 'Close'}),
@@ -1064,7 +1647,7 @@ describe('Local UI', () => {
       within(imageModels).queryByRole('option', {name: /sora-2/i}),
     ).toBeNull()
 
-    await user.click(screen.getByRole('button', {name: 'Video'}))
+    await user.click(screen.getByRole('button', {name: /Video/}))
 
     const videoModels = screen.getByRole('combobox', {name: 'Model'})
     expect(
@@ -1395,6 +1978,32 @@ describe('Local UI', () => {
           }),
         )
       }
+      if (
+        path === '/api/reference-files/browse' &&
+        init?.method === 'POST'
+      ) {
+        return Promise.resolve(
+          jsonResponse({
+            files: [
+              {
+                mediaType: 'image/png',
+                name: 'dashboard.png',
+                path: 'C:\\assets\\dashboard.png',
+                previewUrl:
+                  '/api/reference-files/previews/dashboard-token',
+              },
+              {
+                mediaType: 'image/png',
+                name: 'brand.png',
+                path: 'C:\\assets\\brand.png',
+                previewUrl:
+                  '/api/reference-files/previews/brand-token',
+              },
+            ],
+            type: 'reference-files-browse',
+          }),
+        )
+      }
       return new Promise<Response>((resolve) => {
         completeRequest = resolve
       })
@@ -1404,14 +2013,13 @@ describe('Local UI', () => {
 
     renderApp('/create')
 
-    await user.click(screen.getByRole('button', {name: 'Video'}))
+    await user.click(screen.getByRole('button', {name: /Video/}))
     await user.type(
       screen.getByRole('textbox', {name: 'Creative Brief'}),
       'Reveal the dashboard with a confident launch moment.',
     )
-    await user.selectOptions(
-      screen.getByRole('combobox', {name: 'Style'}),
-      'cinematic',
+    await user.click(
+      screen.getByRole('button', {name: /Cinematic/}),
     )
     await user.click(
       screen.getByRole('button', {name: 'Add references'}),
@@ -1419,15 +2027,9 @@ describe('Local UI', () => {
     const referencePicker = await screen.findByRole('dialog', {
       name: 'Add references',
     })
-    await user.type(
-      within(referencePicker).getByRole('textbox', {
-        name: 'Reference paths',
-      }),
-      'C:\\assets\\dashboard.png{enter}C:\\assets\\brand.png',
-    )
     await user.click(
       within(referencePicker).getByRole('button', {
-        name: 'Add paths',
+        name: 'Browse files',
       }),
     )
     await user.click(
@@ -1455,7 +2057,7 @@ describe('Local UI', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       controls: {
         height: 720,
-        nSeconds: 5,
+        nSeconds: 8,
         nVariants: 1,
         width: 1280,
       },
@@ -1702,6 +2304,218 @@ describe('Local UI', () => {
     ).toBe('/api/generations/01GENERATION/outputs/1')
   })
 
+  test('renders Explainer production details and every Reference Source type', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          generation: generationRecord({
+            mediaType: 'video',
+            references: [
+              {
+                mediaType: 'image/png',
+                modifiedAt: '2026-08-19T12:00:00.000Z',
+                path: 'C:\\assets\\product.png',
+                sha256: 'reference-sha',
+                size: 1024,
+              },
+            ],
+            scenario: {
+              inputs: {
+                sourcePaths: ['C:\\assets\\product.png'],
+              },
+              options: {
+                'aspect-ratio': '16:9',
+                duration: 60,
+                'output-height': 720,
+                'output-width': 1280,
+                'resolved-voice':
+                  'en-US-Ethan:MAI-Voice-2',
+                subtitles: true,
+                voice: {mode: 'auto'},
+              },
+            },
+            selection: {
+              kind: 'scenario',
+              preset: 'hand-drawn',
+              scenario: 'explainer-video',
+            },
+            textReferences: [
+              {
+                format: 'markdown',
+                path: 'inputs/text-reference-1.md',
+                sha256: 'text-sha',
+                size: 512,
+                title: 'Foundry documentation',
+              },
+            ],
+            webReferences: [
+              {url: 'https://learn.microsoft.com/foundry'},
+            ],
+          }),
+          referenceStates: [
+            {
+              path: 'C:\\assets\\product.png',
+              state: 'present',
+            },
+          ],
+          type: 'generations-get',
+        }),
+      ),
+    )
+
+    renderApp('/generations/01GENERATION')
+
+    await screen.findByRole('heading', {
+      name: 'Generation 01GENERATION',
+    })
+    expect(
+      screen.queryByRole('combobox', {name: 'Style'}),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('heading', {name: 'Workflow progress'}),
+    ).toBeNull()
+    expect(screen.getByText('1280 × 720')).not.toBeNull()
+    expect(screen.getByText('16:9')).not.toBeNull()
+    expect(screen.getByText('1 minute')).not.toBeNull()
+    expect(
+      screen.getByText('en-US-Ethan:MAI-Voice-2'),
+    ).not.toBeNull()
+    expect(screen.getByText('On')).not.toBeNull()
+    expect(
+      screen.getByRole('heading', {name: 'Reference Sources'}),
+    ).not.toBeNull()
+    expect(screen.getByText('Text reference 1')).not.toBeNull()
+    expect(screen.queryByText('Foundry documentation')).toBeNull()
+    expect(screen.queryByText('Markdown')).toBeNull()
+    expect(
+      screen
+        .getByRole('img', {name: 'Reference product.png'})
+        .getAttribute('src'),
+    ).toBe('/api/generations/01GENERATION/references/0')
+    expect(screen.getByText('Present')).not.toBeNull()
+    expect(
+      screen.getByRole('link', {
+        name: 'https://learn.microsoft.com/foundry',
+      }),
+    ).not.toBeNull()
+    expect(screen.getByText('C:\\assets\\product.png')).not.toBeNull()
+  })
+
+  test('renders Image and Video Generator production details', async () => {
+    const fetchFake = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          generation: generationRecord({
+            controls: {height: 864, width: 1536},
+            selection: {
+              generator: 'image',
+              kind: 'generator',
+              style: 'editorial-illustration',
+            },
+          }),
+          type: 'generations-get',
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          generation: generationRecord({
+            controls: {duration: 8, height: 720, width: 1280},
+            id: '01VIDEO',
+            mediaType: 'video',
+            selection: {
+              generator: 'video',
+              kind: 'generator',
+              style: 'cinematic',
+            },
+          }),
+          type: 'generations-get',
+        }),
+      )
+    vi.stubGlobal('fetch', fetchFake)
+
+    const image = renderApp('/generations/01IMAGE')
+    await screen.findByRole('heading', {
+      name: 'Generation 01GENERATION',
+    })
+    let production = screen.getByRole('region', {
+      name: 'Production details',
+    })
+    expect(within(production).getByText('16:9')).not.toBeNull()
+    expect(within(production).getByText('1536 × 864')).not.toBeNull()
+    expect(
+      within(production).getByText('Editorial illustration'),
+    ).not.toBeNull()
+
+    image.unmount()
+    renderApp('/generations/01VIDEO')
+    await screen.findByRole('heading', {
+      name: 'Generation 01VIDEO',
+    })
+    production = screen.getByRole('region', {
+      name: 'Production details',
+    })
+    expect(within(production).getByText('16:9')).not.toBeNull()
+    expect(within(production).getByText('1280 × 720')).not.toBeNull()
+    expect(within(production).getByText('8 seconds')).not.toBeNull()
+  })
+
+  test('renders Short-form production details and simplified Text References', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          generation: generationRecord({
+            mediaType: 'video',
+            scenario: {
+              inputs: {sourcePaths: ['C:\\media\\interview.mp4']},
+              options: {
+                'clip-count': 3,
+                'clip-duration': 8,
+                language: 'auto',
+                orientation: 'vertical',
+                subtitles: true,
+              },
+            },
+            selection: {
+              kind: 'scenario',
+              preset: 'bold-urban',
+              scenario: 'short-form-video',
+            },
+            textReferences: [
+              {
+                format: 'markdown',
+                path: 'inputs/text-reference-1.md',
+                sha256: 'text-sha',
+                size: 512,
+                title: 'Internal default title',
+              },
+            ],
+          }),
+          type: 'generations-get',
+        }),
+      ),
+    )
+
+    renderApp('/generations/01SHORT')
+    await screen.findByRole('heading', {
+      name: 'Generation 01GENERATION',
+    })
+    const production = screen.getByRole('region', {
+      name: 'Production details',
+    })
+    expect(within(production).getByText('Bold urban')).not.toBeNull()
+    expect(within(production).getByText('Vertical')).not.toBeNull()
+    expect(within(production).getByText('Auto detect')).not.toBeNull()
+    expect(within(production).getByText('3')).not.toBeNull()
+    expect(within(production).getByText('8 seconds')).not.toBeNull()
+    expect(screen.getByText('Text reference 1')).not.toBeNull()
+    expect(screen.queryByText('Internal default title')).toBeNull()
+    expect(screen.queryByText('Markdown')).toBeNull()
+    expect(screen.queryByText('Plain text')).toBeNull()
+  })
+
   test('shows a retryable Generation detail error', async () => {
     const fetchFake = vi
       .fn()
@@ -1883,6 +2697,119 @@ describe('Local UI', () => {
     ).not.toBeNull()
   })
 
+  test('resumes a failed Explainer workflow from Generation detail', async () => {
+    const failed = generationRecord({
+      error: {
+        code: 'workflow_failed',
+        message: 'Temporary Sora failure',
+      },
+      mediaType: 'video',
+      scenario: {
+        inputs: {sourcePaths: []},
+        options: {
+          duration: 60,
+          voice: {mode: 'auto'},
+        },
+      },
+      selection: {
+        kind: 'scenario',
+        preset: 'hand-drawn',
+        scenario: 'explainer-video',
+      },
+      status: 'failed',
+    })
+    const fetchFake = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (
+          path === '/api/generations/01GENERATION' &&
+          init?.method === 'GET'
+        ) {
+          return jsonResponse({
+            generation: failed,
+            type: 'generations-get',
+          })
+        }
+        if (
+          path === '/api/generations/01GENERATION/resume' &&
+          init?.method === 'POST'
+        ) {
+          return jsonResponse({
+            generation: {
+              ...failed,
+              error: null,
+              status: 'succeeded',
+            },
+            type: 'generations-resume',
+          })
+        }
+        throw new Error(`Unexpected request: ${path}`)
+      },
+    )
+    vi.stubGlobal('fetch', fetchFake)
+    const user = userEvent.setup()
+
+    renderApp('/generations/01GENERATION')
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Resume generation',
+      }),
+    )
+
+    expect(
+      await screen.findByText('Generation resume started.'),
+    ).not.toBeNull()
+    expect(fetchFake).toHaveBeenCalledWith(
+      '/api/generations/01GENERATION/resume',
+      {method: 'POST'},
+    )
+  })
+
+  test('does not expose workflow operations on Generation detail', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          generation: generationRecord({
+            mediaType: 'video',
+            operations: [
+              {
+                kind: 'explainer-plan',
+                status: 'succeeded',
+              },
+              {
+                kind: 'model-generate',
+                status: 'running',
+              },
+              {
+                kind: 'media-compose',
+                status: 'pending',
+              },
+            ],
+            progress: {
+              completed: 1,
+              stage: 'model-generate',
+              total: 3,
+            },
+            status: 'running',
+          }),
+          type: 'generations-get',
+        }),
+      ),
+    )
+
+    renderApp('/generations/01GENERATION')
+
+    await screen.findByRole('heading', {
+      name: 'Generation 01GENERATION',
+    })
+    expect(
+      screen.queryByRole('heading', {name: 'Workflow progress'}),
+    ).toBeNull()
+    expect(screen.queryByText('explainer-plan')).toBeNull()
+    expect(screen.queryByText('media-compose')).toBeNull()
+  })
+
   test('adds a generated output to the Create references', async () => {
     let completeReference: (response: Response) => void =
       () => undefined
@@ -1949,7 +2876,7 @@ describe('Local UI', () => {
     )
     expect(screen.getByText('output.png')).not.toBeNull()
     expect(
-      screen.getByRole('button', {name: 'Add more references'}),
+      screen.getByRole('button', {name: 'Add references'}),
     ).not.toBeNull()
   })
 
@@ -2336,6 +3263,11 @@ describe('Local UI', () => {
         .getByRole('heading', {name: 'Azure CLI context'})
         .closest('[data-slot="card"]'),
     ).not.toBeNull()
+    const layout = document.querySelector(
+      '[data-layout="settings-stack"]',
+    )
+    expect(layout).not.toBeNull()
+    expect(layout?.className).not.toContain('xl:grid-cols')
   })
 
   test('saves a private Azure Speech connection from Settings', async () => {
@@ -2366,7 +3298,7 @@ describe('Local UI', () => {
           return Promise.resolve(
             jsonResponse({
               endpoint:
-                'https://speech-resource.cognitiveservices.azure.com/',
+                'https://eastus2.tts.speech.microsoft.com/',
               state: 'configured',
               type: 'configure-speech',
               voice: 'en-US-Ethan:MAI-Voice-2',
@@ -2384,9 +3316,9 @@ describe('Local UI', () => {
 
     await user.type(
       screen.getByRole('textbox', {
-        name: 'Azure Speech resource endpoint',
+        name: 'Azure Speech synthesis endpoint',
       }),
-      'https://speech-resource.cognitiveservices.azure.com/',
+      'https://eastus2.tts.speech.microsoft.com/',
     )
     await user.type(
       screen.getByLabelText('Azure Speech API key'),
@@ -2411,7 +3343,7 @@ describe('Local UI', () => {
     expect(JSON.parse(String(configureInit.body))).toEqual({
       apiKey: 'private-speech-key',
       endpoint:
-        'https://speech-resource.cognitiveservices.azure.com/',
+        'https://eastus2.tts.speech.microsoft.com/',
       voice: 'en-US-Ethan:MAI-Voice-2',
     })
     expect(
@@ -2476,6 +3408,10 @@ describe('Local UI', () => {
       (screen.getByLabelText('Azure Speech API key') as HTMLInputElement)
         .value,
     ).toBe('')
+    expect(
+      (screen.getByLabelText('Azure Speech API key') as HTMLInputElement)
+        .required,
+    ).toBe(false)
   })
 
   test('shows an authentication error in Settings', async () => {
@@ -2624,6 +3560,8 @@ describe('Local UI', () => {
     expect(screen.getByText('MAI-Image-2.5-Flash')).not.toBeNull()
     expect(screen.getByText('sora-2')).not.toBeNull()
     expect(screen.getByText(/1 unsupported deployment/)).not.toBeNull()
+    expect(screen.getByText('unsupported-model')).not.toBeNull()
+    expect(screen.getByText('other')).not.toBeNull()
   })
 
   test('shows a Foundry configuration error in Settings', async () => {
@@ -2719,6 +3657,7 @@ function generationRecord(
 
 function baseGenerationRecord(): GenerationRecord {
   return {
+    controls: {},
     createdAt: '2026-08-18T12:00:00.000Z',
     creativeBrief: 'Show the dashboard at launch.',
     error: null,
@@ -2744,9 +3683,9 @@ function baseGenerationRecord(): GenerationRecord {
         role: 'generation',
       },
     ],
-    runtime: {catalogVersion: '4', cliVersion: '0.0.0'},
+    runtime: {catalogVersion: '5', cliVersion: '0.0.0'},
     scenario: null,
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
     selection: {
       generator: 'image' as const,
       kind: 'generator' as const,
@@ -2767,6 +3706,39 @@ function settingsResult(): SettingsGetResult {
       state: 'signed-in',
       subscription: {id: 'subscription-id', name: 'Subscription'},
       tenantId: 'tenant-id',
+    },
+    catalog: {
+      videoModels: [
+        {
+          clipDurationsSeconds: [4, 8, 12, 16, 20],
+          composableDurationsSeconds: Array.from(
+            {length: 147},
+            (_, index) => 16 + index * 4,
+          ),
+          explainerDurationPresetsSeconds: [
+            20, 40, 60, 180, 300, 600,
+          ],
+          manualDuration: {
+            maxSeconds: 600,
+            minSeconds: 15,
+          },
+          maxConcurrentRequests: 2,
+          model: 'sora-2',
+          preferredClipSeconds: 20,
+        },
+      ],
+      voices: [
+        {
+          id: 'en-US-Harper:MAI-Voice-2',
+          label: 'Harper · English (US)',
+          model: 'MAI-Voice-2',
+        },
+        {
+          id: 'en-US-Ethan:MAI-Voice-2',
+          label: 'Ethan · English (US)',
+          model: 'MAI-Voice-2',
+        },
+      ],
     },
     manifest: {
       deployments: {
@@ -2817,7 +3789,7 @@ function settingsResult(): SettingsGetResult {
     scenarios: [
       {
         description:
-          'Create a visual explanation with optional narration from a topic or source material.',
+          'Create a narrated visual explanation from a topic or source material.',
         enabled: false,
         id: 'explainer-video' as const,
         mediaType: 'video' as const,
@@ -2833,7 +3805,10 @@ function settingsResult(): SettingsGetResult {
           missingRoles: [],
           state: 'ready' as const,
         },
-        routingRoles: ['visuals'],
+        routingRoles: [
+          'visuals',
+          'voice',
+        ],
         title: 'Explainer video',
       },
       {

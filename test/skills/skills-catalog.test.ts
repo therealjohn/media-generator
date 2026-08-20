@@ -35,6 +35,16 @@ describe('getSkillContent', () => {
     expect(content).not.toContain('## Actions')
   })
 
+  test('describes the composed multi-scene Explainer workflow', () => {
+    const content = getSkillContent('create', 'explainer-video')
+
+    expect(content).toContain('--duration 60')
+    expect(content).toContain('Voice defaults to Auto')
+    expect(content).toContain('--no-voice')
+    expect(content).toContain('one composed MP4')
+    expect(content).toContain('mg generations resume')
+  })
+
   test('lists the current action and reference catalog', () => {
     const content = getSkillContent()
 

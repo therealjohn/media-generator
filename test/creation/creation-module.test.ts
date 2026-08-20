@@ -1,7 +1,6 @@
 import {
   mkdir,
   mkdtemp,
-  readFile,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -25,183 +24,6 @@ afterEach(async () => {
 })
 
 describe('CreationModule', () => {
-  test('creates an Explainer video with Preset and Production Option guidance', async () => {
-    const workspacePath = await mkdtemp(
-      join(tmpdir(), 'media-gen-explainer-'),
-    )
-    temporaryDirectories.push(workspacePath)
-    await mkdir(join(workspacePath, 'generations'))
-    const providerRequests: ProviderGenerationRequest[] = []
-    const creation = createCreationModule({
-      modelRuntime: {
-        generate: async (request) => {
-          providerRequests.push(request)
-          if (request.adapter === 'mai-voice') {
-            return {
-              jobId: null,
-              outputs: [
-                {
-                  contents: Buffer.from('narration'),
-                  extension: '.mp3',
-                  mediaType: 'audio/mpeg',
-                },
-              ],
-            }
-          }
-          return {
-            jobId: 'job-1',
-            outputs: [
-              {
-                contents: Buffer.from('explainer'),
-                extension: '.mp4',
-                mediaType: 'video/mp4',
-              },
-            ],
-          }
-        },
-      },
-      store: createGenerationStore(workspacePath, {
-        createId: () => '01EXPLAINER',
-        now: () => new Date('2026-08-18T12:00:00.000Z'),
-      }),
-      workspacePath,
-    })
-
-    const result = await creation.create({
-      deployments: {
-        visuals: {
-          adapter: 'sora-video',
-          deploymentName: 'sora',
-          id: 'primary:sora',
-          model: 'sora-2',
-          projectEndpoint:
-            'https://example.services.ai.azure.com/api/projects/media',
-          provider: 'primary',
-        },
-        voice: {
-          adapter: 'mai-voice',
-          deploymentName: 'voice',
-          endpoint:
-            'https://eastus.tts.speech.microsoft.com/',
-          id: 'primary:voice',
-          model: 'MAI-Voice-2',
-          projectEndpoint:
-            'https://example.services.ai.azure.com/api/projects/media',
-          provider: 'primary',
-        },
-      },
-      force: false,
-      request: {
-        creativeBrief: 'Explain retrieval-augmented generation.',
-        deploymentOverrides: {},
-        kind: 'scenario',
-        options: {
-          'aspect-ratio': '16:9',
-          duration: 12,
-          narration:
-            'Retrieval-augmented generation grounds answers in trusted sources.',
-          subtitles: true,
-          voice: 'en-US-Harper:MAI-Voice-2',
-        },
-        preset: 'editorial-motion-graphics',
-        scenario: 'explainer-video',
-        sourcePaths: [],
-        textReferences: [
-          {
-            content: '# Product setup\n\nConnect the SDK.',
-            format: 'markdown',
-            title: 'Product documentation',
-          },
-        ],
-        webReferenceUrls: [
-          'https://docs.example.com/product/setup',
-        ],
-      },
-      sourceGenerations: [],
-    })
-
-    expect(providerRequests[0]).toMatchObject({
-      controls: {
-        height: 720,
-        nSeconds: 12,
-        nVariants: 1,
-        width: 1280,
-      },
-      references: [],
-    })
-    expect(providerRequests[0]?.prompt).toContain(
-      'Editorial motion graphics',
-    )
-    expect(providerRequests[0]?.prompt).toContain(
-      'Narration voice request: en-US-Harper:MAI-Voice-2',
-    )
-    expect(providerRequests[0]?.prompt).toContain(
-      'Include clear burned-in subtitles',
-    )
-    expect(providerRequests[0]?.prompt).toContain(
-      'https://docs.example.com/product/setup',
-    )
-    expect(providerRequests[0]?.prompt).toContain(
-      'Text Reference: Product documentation',
-    )
-    expect(providerRequests[0]?.prompt).toContain('Connect the SDK.')
-    expect(providerRequests[1]).toMatchObject({
-      adapter: 'mai-voice',
-      controls: {
-        voice: 'en-US-Harper:MAI-Voice-2',
-      },
-      endpoint: 'https://eastus.tts.speech.microsoft.com/',
-      prompt:
-        'Retrieval-augmented generation grounds answers in trusted sources.',
-      references: [],
-    })
-    expect(result).toMatchObject({
-      id: '01EXPLAINER',
-      resolvedResources: [
-        {
-          id: 'primary:sora',
-          role: 'visuals',
-        },
-        {
-          id: 'primary:voice',
-          role: 'voice',
-        },
-      ],
-      selection: {
-        kind: 'scenario',
-        preset: 'editorial-motion-graphics',
-        scenario: 'explainer-video',
-      },
-      status: 'succeeded',
-      textReferences: [
-        {
-          path: 'inputs/text-reference-1.md',
-          title: 'Product documentation',
-        },
-      ],
-      webReferences: [
-        {url: 'https://docs.example.com/product/setup'},
-      ],
-    })
-    expect(result.outputs).toMatchObject([
-      {mediaType: 'video/mp4'},
-      {mediaType: 'audio/mpeg'},
-    ])
-    expect(JSON.stringify(result)).not.toContain('Connect the SDK.')
-    await expect(
-      readFile(
-        join(
-          workspacePath,
-          'generations',
-          '01EXPLAINER',
-          'inputs',
-          'text-reference-1.md',
-        ),
-        'utf8',
-      ),
-    ).resolves.toBe('# Product setup\n\nConnect the SDK.')
-  })
-
   test('creates styled Short-form video variants through one Scenario request', async () => {
     const workspacePath = await mkdtemp(
       join(tmpdir(), 'media-gen-creation-'),
@@ -317,7 +139,7 @@ describe('CreationModule', () => {
           orientation: 'vertical',
         },
       },
-      schemaVersion: 4,
+      schemaVersion: 5,
       selection: {
         kind: 'scenario',
         preset: 'bold-urban',

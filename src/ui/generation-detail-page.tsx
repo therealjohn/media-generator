@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   Download,
+  File as FileIcon,
   ImageIcon,
   Link2,
   LoaderCircle,
@@ -11,7 +12,12 @@ import {
   Trash2,
   Video,
 } from 'lucide-react'
-import {useCallback, useEffect, useState} from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react'
 import {Link, useParams} from 'react-router-dom'
 
 import {
@@ -41,18 +47,32 @@ import {
   createApiClient,
   errorMessage,
   type GenerationRecord,
+  type GenerationsGetResult,
 } from './api-client.js'
 import {
   defaultStyleFor,
   listStyleDefinitions,
 } from '../catalog/styles.js'
 import {
+  generationPresetLabel,
   generationSelectionLabel,
   generationStyleLabel,
 } from './generation-label.js'
 import {GenerationStatusBadge} from './generation-status-badge.js'
 
 const api = createApiClient()
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).at(-1) ?? path
+}
+
+function referenceStateLabel(
+  state: 'changed' | 'missing' | 'present' | undefined,
+): string {
+  return state === undefined
+    ? 'Unknown'
+    : state.charAt(0).toUpperCase() + state.slice(1)
+}
 
 export function GenerationDetailPage() {
   const {id = ''} = useParams()
@@ -71,11 +91,17 @@ export function GenerationDetailPage() {
     | {state: 'loading'}
     | {generationId: string; state: 'success'}
   >({state: 'idle'})
+  const [resumeState, setResumeState] = useState<
+    'idle' | 'loading' | 'success'
+  >('idle')
   const [referenceState, setReferenceState] = useState<
     | {state: 'idle'}
     | {state: 'loading'}
     | {paths: string[]; state: 'success'}
   >({state: 'idle'})
+  const [referenceAssetStates, setReferenceAssetStates] = useState<
+    GenerationsGetResult['referenceStates']
+  >([])
   const [exportState, setExportState] = useState<
     | {state: 'idle'}
     | {state: 'loading'}
@@ -92,8 +118,9 @@ export function GenerationDetailPage() {
     setLoadError(null)
     void api
       .getGeneration(id)
-      .then(({generation: loaded}) => {
+      .then(({generation: loaded, referenceStates}) => {
         setGeneration(loaded)
+        setReferenceAssetStates(referenceStates ?? [])
         setCreativeBrief(loaded.creativeBrief)
         setStyle(
           loaded.selection.kind === 'generator'
@@ -109,6 +136,37 @@ export function GenerationDetailPage() {
   }, [id])
 
   useEffect(loadGeneration, [loadGeneration])
+
+  useEffect(() => {
+    if (
+      generation === null ||
+      ![
+        'created',
+        'submitted',
+        'running',
+        'validating',
+      ].includes(generation.status)
+    ) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      void api
+        .getGeneration(id)
+        .then(({generation: updated, referenceStates}) => {
+          setGeneration(updated)
+          setReferenceAssetStates(referenceStates ?? [])
+        })
+        .catch((error: unknown) => {
+          setActionError(
+            errorMessage(
+              error,
+              'Generation status could not be refreshed.',
+            ),
+          )
+        })
+    }, 1_000)
+    return () => window.clearTimeout(timer)
+  }, [generation, id])
 
   async function handleEdit() {
     setActionError(null)
@@ -142,6 +200,19 @@ export function GenerationDetailPage() {
       })
     } catch (error) {
       setRecreateState({state: 'idle'})
+      setActionError(errorMessage(error))
+    }
+  }
+
+  async function handleResume() {
+    setActionError(null)
+    setResumeState('loading')
+    try {
+      const result = await api.resumeGeneration(id)
+      setGeneration(result.generation)
+      setResumeState('success')
+    } catch (error) {
+      setResumeState('idle')
       setActionError(errorMessage(error))
     }
   }
@@ -229,6 +300,236 @@ export function GenerationDetailPage() {
     )
   }
 
+  function ReferenceSourceGroup({
+    children,
+    title,
+  }: {
+    children: ReactNode
+    title: string
+  }) {
+    return (
+      <section className="grid gap-2">
+        <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          {title}
+        </h3>
+        <ul className="grid gap-2">{children}</ul>
+      </section>
+    )
+  }
+
+  function generationProductionEntries(
+    generation: GenerationRecord,
+  ): Array<[string, string]> {
+    const options = generation.scenario?.options ?? {}
+    const controls = generation.controls
+    const aspectRatio = stringOption(options, 'aspect-ratio')
+    const configuredWidth =
+      numberOption(options, 'output-width') ??
+      numberOption(controls, 'width')
+    const configuredHeight =
+      numberOption(options, 'output-height') ??
+      numberOption(controls, 'height')
+    const fallbackDimensions =
+      aspectRatio === '9:16'
+        ? {height: 1280, width: 720}
+        : aspectRatio === '16:9'
+          ? {height: 720, width: 1280}
+          : undefined
+    const width = configuredWidth ?? fallbackDimensions?.width
+    const height = configuredHeight ?? fallbackDimensions?.height
+    const resolvedAspectRatio =
+      aspectRatio ??
+      aspectRatioForDimensions(configuredWidth, configuredHeight)
+    const duration =
+      numberOption(options, 'duration') ??
+      numberOption(controls, 'duration')
+    const subtitles = booleanOption(options, 'subtitles')
+    const entries: Array<[string, string | undefined]> = [
+      ['Model', generation.resolvedModel.model],
+      ['Deployment', generation.resolvedModel.deployment],
+      ['Created with', generationSelectionLabel(generation)],
+      [
+        'Style',
+        generation.selection.kind === 'generator'
+          ? generationStyleLabel(generation)
+          : undefined,
+      ],
+      [
+        'Preset',
+        generation.selection.kind === 'scenario'
+          ? generationPresetLabel(generation)
+          : undefined,
+      ],
+      ['Aspect ratio', resolvedAspectRatio],
+      [
+        'Resolution',
+        width !== undefined && height !== undefined
+          ? `${width} × ${height}`
+          : undefined,
+      ],
+      [
+        'Duration',
+        duration === undefined ? undefined : durationLabel(duration),
+      ],
+      ['Voice', voiceOption(options)],
+      [
+        'Subtitles',
+        subtitles === undefined
+          ? undefined
+          : subtitles
+            ? 'On'
+            : 'Off',
+      ],
+      [
+        'Orientation',
+        generation.selection.kind === 'scenario' &&
+        generation.selection.scenario === 'short-form-video'
+          ? humanizeOption(stringOption(options, 'orientation'))
+          : undefined,
+      ],
+      [
+        'Language',
+        generation.selection.kind === 'scenario' &&
+        generation.selection.scenario === 'short-form-video'
+          ? languageLabel(stringOption(options, 'language'))
+          : undefined,
+      ],
+      [
+        'Clip count',
+        generation.selection.kind === 'scenario' &&
+        generation.selection.scenario === 'short-form-video'
+          ? numberOption(options, 'clip-count')?.toString()
+          : undefined,
+      ],
+      [
+        'Clip duration',
+        generation.selection.kind === 'scenario' &&
+        generation.selection.scenario === 'short-form-video'
+          ? optionalDurationLabel(
+              numberOption(options, 'clip-duration'),
+            )
+          : undefined,
+      ],
+    ]
+    return entries.filter(
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined && entry[1].length > 0,
+    )
+  }
+
+  function aspectRatioForDimensions(
+    width: number | undefined,
+    height: number | undefined,
+  ): string | undefined {
+    if (width === undefined || height === undefined) {
+      return undefined
+    }
+    const divisor = greatestCommonDivisor(width, height)
+    return `${width / divisor}:${height / divisor}`
+  }
+
+  function greatestCommonDivisor(left: number, right: number): number {
+    let currentLeft = Math.abs(left)
+    let currentRight = Math.abs(right)
+    while (currentRight !== 0) {
+      const remainder = currentLeft % currentRight
+      currentLeft = currentRight
+      currentRight = remainder
+    }
+    return currentLeft || 1
+  }
+
+  function humanizeOption(value: string | undefined): string | undefined {
+    if (value === undefined) {
+      return undefined
+    }
+    return value.charAt(0).toUpperCase() + value.slice(1)
+  }
+
+  function languageLabel(value: string | undefined): string | undefined {
+    const labels: Record<string, string> = {
+      auto: 'Auto detect',
+      en: 'English',
+      es: 'Spanish',
+      fr: 'French',
+    }
+    return value === undefined ? undefined : (labels[value] ?? value)
+  }
+
+  function optionalDurationLabel(
+    seconds: number | undefined,
+  ): string | undefined {
+    return seconds === undefined ? undefined : durationLabel(seconds)
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) {
+      return `${bytes} bytes`
+    }
+    const kibibytes = bytes / 1024
+    return `${Number.isInteger(kibibytes) ? kibibytes : kibibytes.toFixed(1)} KB`
+  }
+
+  function stringOption(
+    options: Record<string, unknown>,
+    name: string,
+  ): string | undefined {
+    const value = options[name]
+    return typeof value === 'string' && value.length > 0
+      ? value
+      : undefined
+  }
+
+  function numberOption(
+    options: Record<string, unknown>,
+    name: string,
+  ): number | undefined {
+    const value = options[name]
+    return typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : undefined
+  }
+
+  function booleanOption(
+    options: Record<string, unknown>,
+    name: string,
+  ): boolean | undefined {
+    const value = options[name]
+    return typeof value === 'boolean' ? value : undefined
+  }
+
+  function voiceOption(
+    options: Record<string, unknown>,
+  ): string | undefined {
+    const resolved = stringOption(options, 'resolved-voice')
+    if (resolved !== undefined) {
+      return resolved
+    }
+    const voice = options.voice
+    if (typeof voice !== 'object' || voice === null || !('mode' in voice)) {
+      return undefined
+    }
+    if (voice.mode === 'off') {
+      return 'Off'
+    }
+    if (
+      voice.mode === 'selected' &&
+      'id' in voice &&
+      typeof voice.id === 'string'
+    ) {
+      return voice.id
+    }
+    return voice.mode === 'auto' ? 'Auto' : undefined
+  }
+
+  function durationLabel(seconds: number): string {
+    if (seconds < 60) {
+      return `${seconds} seconds`
+    }
+    const minutes = seconds / 60
+    return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`
+  }
+
   if (!generation) {
     return (
       <main className="grid min-h-[calc(100vh-4rem)] place-items-center px-4">
@@ -276,6 +577,7 @@ export function GenerationDetailPage() {
 
   const MediaIcon =
     generation.mediaType === 'image' ? ImageIcon : Video
+  const productionEntries = generationProductionEntries(generation)
 
   return (
     <main
@@ -365,7 +667,7 @@ export function GenerationDetailPage() {
             variant="destructive"
           >
             <AlertCircle aria-hidden="true" />
-            <AlertTitle>{generation.error.code}</AlertTitle>
+            <AlertTitle>Generation failed</AlertTitle>
             <AlertDescription>
               {generation.error.message}
             </AlertDescription>
@@ -410,55 +712,38 @@ export function GenerationDetailPage() {
                 />
               </section>
 
-              <section className="grid gap-2">
-                <Label htmlFor="detail-style">Style</Label>
-                <NativeSelect
-                  className="w-full"
-                  id="detail-style"
-                  onChange={(event) => setStyle(event.target.value)}
-                  value={style}
-                >
-                  {listStyleDefinitions(generation.mediaType).map(
-                    (definition) => (
-                      <NativeSelectOption
-                        key={definition.id}
-                        value={definition.id}
-                      >
-                        {definition.label}
-                      </NativeSelectOption>
-                    ),
-                  )}
-                </NativeSelect>
-              </section>
+              {generation.selection.kind === 'generator' ? (
+                <section className="grid gap-2">
+                  <Label htmlFor="detail-style">Style</Label>
+                  <NativeSelect
+                    className="w-full"
+                    id="detail-style"
+                    onChange={(event) => setStyle(event.target.value)}
+                    value={style}
+                  >
+                    {listStyleDefinitions(generation.mediaType).map(
+                      (definition) => (
+                        <NativeSelectOption
+                          key={definition.id}
+                          value={definition.id}
+                        >
+                          {definition.label}
+                        </NativeSelectOption>
+                      ),
+                    )}
+                  </NativeSelect>
+                </section>
+              ) : null}
 
               <Separator />
 
-              <section className="grid gap-3 text-sm">
-                {[
-                  ['Model', generation.resolvedModel.model],
-                  ['Deployment', generation.resolvedModel.deployment],
-                  ['Created with', generationSelectionLabel(generation)],
-                  ['Style', generationStyleLabel(generation)],
-                  [
-                    'Preset',
-                    generation.selection.kind === 'scenario'
-                      ? generation.selection.preset
-                      : undefined,
-                  ],
-                  [
-                    'Scenario',
-                    generation.selection.kind === 'scenario'
-                      ? generationSelectionLabel(generation)
-                      : undefined,
-                  ],
-                ]
-                  .filter(
-                    (entry): entry is [string, string] =>
-                      entry[1] !== undefined,
-                  )
-                  .map(([label, value]) => (
+              <section
+                aria-label="Production details"
+                className="grid gap-3 text-sm"
+              >
+                {productionEntries.map(([label, value]) => (
                   <div
-                    className="grid grid-cols-[90px_minmax(0,1fr)] gap-3"
+                    className="grid grid-cols-[110px_minmax(0,1fr)] gap-3"
                     key={label}
                   >
                     <span className="text-muted-foreground">
@@ -468,35 +753,107 @@ export function GenerationDetailPage() {
                       {value}
                     </strong>
                   </div>
-                  ))}
+                ))}
               </section>
 
               <Separator />
 
               <section className="grid gap-3">
                 <h2 className="font-heading text-sm font-medium">
-                  Reference Assets
+                  Reference Sources
                 </h2>
-                {generation.references.length === 0 ? (
+                {generation.references.length === 0 &&
+                generation.textReferences.length === 0 &&
+                generation.webReferences.length === 0 ? (
                   <p className="text-xs leading-5 text-muted-foreground">
-                    No Reference Assets.
+                    No Reference Sources.
                   </p>
                 ) : (
-                  <ul className="grid gap-2">
-                    {generation.references.map((reference) => (
-                      <li
-                        className="grid gap-1 rounded-lg border bg-muted/20 p-3"
-                        key={`${reference.path}-${reference.sha256}`}
-                      >
-                        <code className="break-all text-xs">
-                          {reference.path}
-                        </code>
-                        <span className="text-xs text-muted-foreground">
-                          {reference.mediaType}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="grid gap-4">
+                    {generation.references.length > 0 ? (
+                      <ReferenceSourceGroup title="Reference Assets">
+                        {generation.references.map((reference, index) => (
+                          <li
+                            className="grid grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-lg border bg-muted/20 p-3"
+                            key={`${reference.path}-${reference.sha256}`}
+                          >
+                            {reference.mediaType.startsWith('image/') ? (
+                              <img
+                                alt={`Reference ${fileName(reference.path)}`}
+                                className="size-16 rounded-lg border object-cover"
+                                src={`/api/generations/${encodeURIComponent(generation.id)}/references/${index}`}
+                              />
+                            ) : (
+                              <span className="grid size-16 place-items-center rounded-lg border bg-background">
+                                <FileIcon
+                                  aria-hidden="true"
+                                  className="size-6 text-muted-foreground"
+                                />
+                              </span>
+                            )}
+                            <span className="grid min-w-0 content-center gap-1">
+                              <span className="flex items-center justify-between gap-2">
+                                <strong className="truncate text-sm font-medium">
+                                  {fileName(reference.path)}
+                                </strong>
+                                <Badge
+                                  variant="outline"
+                                >
+                                  {referenceStateLabel(
+                                    referenceAssetStates[index]?.state,
+                                  )}
+                                </Badge>
+                              </span>
+                              <code className="break-all text-xs">
+                                {reference.path}
+                              </code>
+                              <span className="text-xs text-muted-foreground">
+                                {reference.mediaType}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                      </ReferenceSourceGroup>
+                    ) : null}
+                    {generation.textReferences.length > 0 ? (
+                      <ReferenceSourceGroup title="Text References">
+                        {generation.textReferences.map(
+                          (reference, index) => (
+                          <li
+                            className="grid gap-1 rounded-lg border bg-muted/20 p-3"
+                            key={`${reference.path}-${reference.sha256}`}
+                          >
+                            <strong className="text-sm font-medium">
+                              Text reference {index + 1}
+                            </strong>
+                            <span className="text-xs text-muted-foreground">
+                              {formatBytes(reference.size)}
+                            </span>
+                          </li>
+                          ),
+                        )}
+                      </ReferenceSourceGroup>
+                    ) : null}
+                    {generation.webReferences.length > 0 ? (
+                      <ReferenceSourceGroup title="Web References">
+                        {generation.webReferences.map((reference) => (
+                          <li
+                            className="rounded-lg border bg-muted/20 p-3"
+                            key={reference.url}
+                          >
+                            <a
+                              className="break-all text-sm text-primary underline underline-offset-4"
+                              href={reference.url}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              {reference.url}
+                            </a>
+                          </li>
+                        ))}
+                      </ReferenceSourceGroup>
+                    ) : null}
+                  </div>
                 )}
               </section>
 
@@ -531,6 +888,36 @@ export function GenerationDetailPage() {
               <Separator />
 
               <section className="grid grid-cols-2 gap-2">
+                {[
+                  'created',
+                  'failed',
+                  'interrupted',
+                  'running',
+                  'submitted',
+                  'validating',
+                ].includes(generation.status) &&
+                generation.selection.kind === 'scenario' &&
+                generation.selection.scenario ===
+                  'explainer-video' ? (
+                  <Button
+                    className="col-span-2"
+                    disabled={resumeState === 'loading'}
+                    onClick={handleResume}
+                    type="button"
+                  >
+                    {resumeState === 'loading' ? (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                    ) : (
+                      <RefreshCcw aria-hidden="true" />
+                    )}
+                    {resumeState === 'loading'
+                      ? 'Resuming generation...'
+                      : 'Resume generation'}
+                  </Button>
+                ) : null}
                 <Button
                   disabled={editState.state === 'loading'}
                   onClick={handleEdit}
@@ -613,6 +1000,12 @@ export function GenerationDetailPage() {
                   Delete
                 </Button>
               </section>
+
+              {resumeState === 'success' ? (
+                <p className="text-sm text-emerald-600" role="status">
+                  Generation resume started.
+                </p>
+              ) : null}
 
               {exportState.state === 'confirming' ? (
                 <Card

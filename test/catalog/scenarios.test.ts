@@ -4,6 +4,8 @@ import {
   getScenarioDefinition,
   listScenarioDefinitions,
   parseScenarioRequest,
+  requiredScenarioRoles,
+  scenarioRolesForRequest,
 } from '../../src/catalog/scenarios.js'
 
 describe('Scenario catalog', () => {
@@ -24,6 +26,16 @@ describe('Scenario catalog', () => {
       id: 'explainer-video',
       mediaType: 'video',
       optionalRoutingRoles: ['voice'],
+      roleMediaTypes: {
+        planning: 'text',
+        'reference-image': 'image',
+        visuals: 'video',
+        voice: 'audio',
+      },
+      routingRoles: [
+        'visuals',
+        'voice',
+      ],
       presets: expect.arrayContaining([
         expect.objectContaining({id: 'editorial-motion-graphics'}),
         expect.objectContaining({id: 'stickman-cartoon'}),
@@ -37,6 +49,69 @@ describe('Scenario catalog', () => {
       ]),
       title: 'Explainer video',
     })
+    const handDrawn = getScenarioDefinition(
+      'explainer-video',
+    )?.presets.find((preset) => preset.id === 'hand-drawn')
+    expect(handDrawn?.description).toBe(
+      'Loose ink illustration with paper texture and animated line work.',
+    )
+    expect(handDrawn?.description).not.toContain(
+      'clean off-white paper',
+    )
+    expect(handDrawn?.guidance).toContain(
+      'loose confident black ink pen-and-marker line art on clean off-white paper',
+    )
+  })
+
+  test('defaults Explainer narration to Auto and a one-minute duration', () => {
+    const request = parseScenarioRequest('explainer-video', {
+      creativeBrief: 'Explain retrieval-augmented generation.',
+      options: {},
+      preset: 'hand-drawn',
+      sourcePaths: [],
+    })
+
+    expect(request).toMatchObject({
+      options: {
+        'aspect-ratio': '16:9',
+        duration: 60,
+        subtitles: true,
+        voice: {mode: 'auto'},
+      },
+      scenario: 'explainer-video',
+    })
+    expect(scenarioRolesForRequest(request)).toEqual([
+      'planning',
+      'reference-image',
+      'visuals',
+      'voice',
+    ])
+    expect(
+      requiredScenarioRoles(
+        getScenarioDefinition('explainer-video')!,
+      ),
+    ).toEqual([
+      'visuals',
+      'voice',
+    ])
+  })
+
+  test('allows Explainer narration to be explicitly disabled', () => {
+    const request = parseScenarioRequest('explainer-video', {
+      creativeBrief: 'Explain retrieval-augmented generation.',
+      options: {
+        duration: 600,
+        voice: {mode: 'off'},
+      },
+      preset: 'hand-drawn',
+      sourcePaths: [],
+    })
+
+    expect(scenarioRolesForRequest(request)).toEqual([
+      'planning',
+      'reference-image',
+      'visuals',
+    ])
   })
 
   test('validates a Short-form video request', () => {
@@ -90,5 +165,16 @@ describe('Scenario catalog', () => {
         sourcePaths: ['C:\\media\\portrait.png'],
       }),
     ).toThrow('Short-form video source must be an MP4 or MOV file')
+  })
+
+  test('rejects unsupported Short-form clip durations', () => {
+    expect(() =>
+      parseScenarioRequest('short-form-video', {
+        creativeBrief: '',
+        options: {'clip-duration': 5},
+        preset: 'bold-urban',
+        sourcePaths: ['C:\\media\\interview.mp4'],
+      }),
+    ).toThrow('Expected a supported video duration')
   })
 })

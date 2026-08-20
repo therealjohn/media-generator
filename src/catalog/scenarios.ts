@@ -5,12 +5,14 @@ import type {
   MediaType,
   ModelMediaType,
 } from './models.js'
+import {listModelDefinitions} from './models.js'
 import type {TextReferenceInput} from '../generation/text-reference.js'
 
 export type ScenarioId = 'explainer-video' | 'short-form-video'
 
 export interface ScenarioPresetDefinition {
   description: string
+  guidance: string
   id: string
   title: string
 }
@@ -23,6 +25,7 @@ export interface ScenarioProductionOptionDefinition {
 }
 
 export interface ScenarioDefinition {
+  defaultRoutingRoles?: readonly string[]
   description: string
   id: ScenarioId
   mediaType: MediaType
@@ -34,6 +37,11 @@ export interface ScenarioDefinition {
   title: string
 }
 
+export type VoiceSelection =
+  | {mode: 'auto'}
+  | {mode: 'off'}
+  | {id: string; mode: 'selected'}
+
 export type ScenarioCreateRequest =
   | {
       creativeBrief: string
@@ -42,9 +50,8 @@ export type ScenarioCreateRequest =
       options: {
         'aspect-ratio': '16:9' | '9:16'
         duration: number
-        narration?: string
         subtitles: boolean
-        voice?: string
+        voice: VoiceSelection
       }
       preset: string
       scenario: 'explainer-video'
@@ -71,8 +78,12 @@ export type ScenarioCreateRequest =
     }
 
 const explainerVideo: ScenarioDefinition = {
+  defaultRoutingRoles: [
+    'visuals',
+    'voice',
+  ],
   description:
-    'Create a visual explanation with optional narration from a topic or source material.',
+    'Create a narrated visual explanation from a topic or source material.',
   id: 'explainer-video',
   mediaType: 'video',
   optionalRoutingRoles: ['voice'],
@@ -100,7 +111,8 @@ const explainerVideo: ScenarioDefinition = {
     preset(
       'hand-drawn',
       'Hand drawn',
-      'Loose monochrome drawing and animated line work.',
+      'Loose ink illustration with paper texture and animated line work.',
+      'Hand Drawn: loose confident black ink pen-and-marker line art on clean off-white paper, sketchy hand-illustrated outlines, light gray hatching for shadow, minimal flat fills, subtle marker grain, and generous white negative space.',
     ),
     preset(
       'poster-vector',
@@ -111,7 +123,7 @@ const explainerVideo: ScenarioDefinition = {
   productionOptions: [
     option(
       'voice',
-      'Optional narration voice. Leave disabled to create visuals only.',
+      'Narration Voice. Auto uses the private Speech Connection default; Voice can be turned off.',
       'string',
     ),
     option('subtitles', 'Burn subtitles into the output.', 'boolean'),
@@ -119,10 +131,15 @@ const explainerVideo: ScenarioDefinition = {
     option('aspect-ratio', 'Output aspect ratio.', 'string'),
   ],
   roleMediaTypes: {
+    planning: 'text',
+    'reference-image': 'image',
     visuals: 'video',
     voice: 'audio',
   },
-  routingRoles: ['visuals', 'voice'],
+  routingRoles: [
+    'visuals',
+    'voice',
+  ],
   title: 'Explainer video',
 }
 
@@ -180,6 +197,26 @@ const shortFormVideo: ScenarioDefinition = {
 }
 
 const definitions = [explainerVideo, shortFormVideo] as const
+const workflowRoles: Partial<
+  Record<ScenarioId, readonly string[]>
+> = {
+  'explainer-video': ['planning', 'reference-image'],
+}
+
+const supportedVideoClipDurations = new Set(
+  listModelDefinitions().flatMap(
+    (definition) => definition.video?.clipDurationsSeconds ?? [],
+  ),
+)
+const videoClipDurationSchema = z
+  .number()
+  .int()
+  .refine(
+    (duration) => supportedVideoClipDurations.has(duration),
+    {
+      message: `Expected a supported video duration: ${[...supportedVideoClipDurations].sort((left, right) => left - right).join(', ')}`,
+    },
+  )
 
 const explainerRequestSchema = z.object({
   creativeBrief: z.string().trim().min(1),
@@ -188,10 +225,18 @@ const explainerRequestSchema = z.object({
     (value) => value ?? {},
     z.object({
       'aspect-ratio': z.enum(['16:9', '9:16']).default('16:9'),
-      duration: z.number().int().min(5).max(12).default(12),
-      narration: z.string().optional(),
+      duration: z.number().int().min(15).max(600).default(60),
       subtitles: z.boolean().default(true),
-      voice: z.string().min(1).optional(),
+      voice: z
+        .discriminatedUnion('mode', [
+          z.object({mode: z.literal('auto')}),
+          z.object({mode: z.literal('off')}),
+          z.object({
+            id: z.string().min(1),
+            mode: z.literal('selected'),
+          }),
+        ])
+        .default({mode: 'auto'}),
     }),
   ),
   preset: z.string().min(1).default('editorial-motion-graphics'),
@@ -215,7 +260,7 @@ const shortFormRequestSchema = z.object({
     (value) => value ?? {},
     z.object({
       'clip-count': z.number().int().min(1).max(4).default(1),
-      'clip-duration': z.number().int().min(5).max(12).default(8),
+      'clip-duration': videoClipDurationSchema.default(8),
       language: z.string().min(1).default('auto'),
       orientation: z.enum(['horizontal', 'vertical']).default('vertical'),
       subtitles: z.boolean().default(true),
@@ -294,10 +339,12 @@ export function assembleScenarioPrompt(
   if (request.scenario === 'explainer-video') {
     return [
       'Create a concise visual explainer video.',
-      `Visual preset: ${selectedPreset.title}. ${selectedPreset.description}`,
-      request.options.voice === undefined
+      `Visual preset: ${selectedPreset.title}. ${selectedPreset.guidance}`,
+      request.options.voice.mode === 'off'
         ? 'Do not add voice narration.'
-        : `Narration voice request: ${request.options.voice}.`,
+        : request.options.voice.mode === 'auto'
+          ? 'Use the configured default narration Voice.'
+          : `Narration voice request: ${request.options.voice.id}.`,
       request.options.subtitles
         ? 'Include clear burned-in subtitles.'
         : 'Do not include subtitles.',
@@ -308,7 +355,7 @@ export function assembleScenarioPrompt(
 
   return [
     'Create styled short-form video variants from the supplied source video.',
-    `Visual preset: ${selectedPreset.title}. ${selectedPreset.description}`,
+    `Visual preset: ${selectedPreset.title}. ${selectedPreset.guidance}`,
     `Use ${request.options.orientation} composition.`,
     request.options.subtitles
       ? 'Include prominent styled subtitles.'
@@ -323,6 +370,9 @@ export function assembleScenarioPrompt(
 export function requiredScenarioRoles(
   scenario: ScenarioDefinition,
 ): string[] {
+  if (scenario.defaultRoutingRoles !== undefined) {
+    return [...scenario.defaultRoutingRoles]
+  }
   const optionalRoles = new Set(
     scenario.optionalRoutingRoles ?? [],
   )
@@ -338,13 +388,16 @@ export function scenarioRolesForRequest(
   const optionalRoles = new Set(
     scenario.optionalRoutingRoles ?? [],
   )
-  return scenario.routingRoles.filter(
-    (role) =>
-      !optionalRoles.has(role) ||
-      (request.scenario === 'explainer-video' &&
-        role === 'voice' &&
-        request.options.voice !== undefined),
-  )
+  return [
+    ...(workflowRoles[request.scenario] ?? []),
+    ...scenario.routingRoles.filter(
+      (role) =>
+        !optionalRoles.has(role) ||
+        (request.scenario === 'explainer-video' &&
+          role === 'voice' &&
+          request.options.voice.mode !== 'off'),
+    ),
+  ]
 }
 
 function option(
@@ -359,8 +412,9 @@ function preset(
   id: string,
   title: string,
   description: string,
+  guidance = description,
 ): ScenarioPresetDefinition {
-  return {description, id, title}
+  return {description, guidance, id, title}
 }
 
 function requirePreset(

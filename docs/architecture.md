@@ -25,7 +25,11 @@ flowchart LR
     App --> Workspace[Workspace module]
     App --> Catalog[Built-in catalog module]
     App --> Generation[Generation module]
+    Generation --> Workflow[Workflow module]
+    Workflow --> Composer[FFmpeg composition adapter]
     Generation --> Runtime[Model runtime seam]
+    Workflow --> Runtime
+    Runtime --> Planner[Azure OpenAI structured planning adapter]
     Runtime --> MAI[MAI Image adapter]
     Runtime --> Speech[Azure Speech adapter]
     Runtime --> OpenAI[Azure OpenAI image adapter]
@@ -112,6 +116,7 @@ This is a deep module. Callers do not know registry or directory-layout details.
 Responsibilities:
 
 - own Generator, Scenario, Preset, and Style definitions
+- separate user-facing Preset descriptions from internal prompt guidance
 - own Scenario Production Option schemas
 - own model capability declarations
 - validate Generator and Scenario choices
@@ -130,11 +135,35 @@ Responsibilities:
 - assemble Generator or Scenario prompts
 - translate Presets and Production Options into typed controls
 - resolve the Scenario's execution roles
+- select direct Generation or reusable Workflow execution
 - prepare Selection, Scenario, resource, operation, and progress metadata
 - delegate normalized execution to the Generation module
 
 The application resolves workspace routing and provider configuration before
 calling this module. CLI and HTTP adapters do not implement Scenario logic.
+
+### Workflow module
+
+Responsibilities:
+
+- execute typed, code-authored Workflow definitions
+- schedule dependency graphs with bounded global and per-resource concurrency
+- expand a semantic plan into fan-out and join steps
+- checkpoint step state and working artifacts under one Generation
+- hold a heartbeat lease so only one process executes or resumes a Generation
+- project step state into Generation operations and progress
+- resume failed or interrupted work without repeating successful steps
+- publish only declared final artifacts as Generation outputs
+
+The interface is shared by composed Scenarios. Step handlers provide reusable
+structured planning, model generation, and local media composition primitives.
+Workflow definitions retain Scenario-specific schemas, prompts, and graph
+shape. JSON catalog files configure model capabilities; they do not define
+executable workflows.
+
+Workflow operation names and step progress remain internal. Generation detail
+surfaces only overall status, user intent, production choices, resolved media
+metadata, and Reference Sources.
 
 ### Generation module
 
@@ -184,8 +213,14 @@ Production adapters:
 | `BFLFluxAdapter` | FLUX.1 and FLUX.2 family | synchronous native BFL provider calls |
 | `MAIVoiceAdapter` | MAI-Voice-2 family | synchronous Azure Speech SSML synthesis to MP3 |
 | `SoraVideoJobAdapter` | Sora 2 | submit, poll, and download MP4 |
+| `AzureOpenAIChatAdapter` | GPT-4.1 and GPT-5.4 families | schema-constrained planning output |
 
 Testing uses a fake adapter at the same seam.
+
+Local composition uses packaged FFmpeg and FFprobe binaries behind the
+`MediaComposer` interface. The adapter normalizes clips, mixes narration over
+provider audio, adjusts overlong narration within scene timing, burns
+deterministic subtitles, concatenates scenes, and validates final duration.
 
 ### Authentication module
 
@@ -274,6 +309,12 @@ Illustrative shape:
     }
   },
   "deployments": {
+    "gpt-4.1-mini": {
+      "provider": "foundry-east",
+      "deploymentName": "explainer-planner",
+      "model": "gpt-4.1-mini",
+      "adapter": "azure-openai-chat"
+    },
     "mai-image-2.5-flash": {
       "provider": "foundry-east",
       "deploymentName": "mai-image-fast",
@@ -338,6 +379,10 @@ Both CLI and Local UI edit it through the Workspace module.
       |- generations/
       |  `- <generation-id>/
       |     |- generation.json
+      |     |- working/
+      |     |  |- workflow.json
+      |     |  |- reference/
+      |     |  `- scenes/
       |     `- outputs/
       |- cache/
       `- logs/
@@ -352,7 +397,7 @@ Speech configuration is stored there:
 {
   "schemaVersion": 1,
   "speech": {
-    "endpoint": "https://example.cognitiveservices.azure.com/",
+    "endpoint": "https://eastus2.tts.speech.microsoft.com/",
     "apiKey": "<private>",
     "defaultVoice": "en-US-Ethan:MAI-Voice-2"
   }
@@ -371,12 +416,13 @@ Illustrative record:
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "id": "0198...",
   "status": "succeeded",
   "createdAt": "2026-08-17T20:00:00Z",
   "updatedAt": "2026-08-17T20:01:18Z",
   "creativeBrief": "Choose the strongest product insight.",
+  "controls": {},
   "selection": {
     "kind": "scenario",
     "scenario": "short-form-video",
@@ -473,9 +519,10 @@ The internal Model Prompt and raw provider request are not stored.
 Generation record version 1 used fixed product-marketing `scenario` and
 `deliverable` fields. Version 2 introduced Generator and Scenario
 Selections. Version 3 added Scenario inputs and options, resolved resources,
-operations, and progress. Readers normalize versions 1-3 into version 4,
-which adds Text Reference metadata and Web Reference URLs. Text content is
-stored in private Generation input files rather than inline in the record.
+operations, and progress. Version 4 added Text Reference metadata and Web
+Reference URLs. Version 5 stores normalized Generator controls. Readers
+normalize versions 1-4 into version 5. Text content is stored in private
+Generation input files rather than inline in the record.
 
 ## Generation lifecycle
 
@@ -484,7 +531,9 @@ created -> validating -> submitted -> running -> succeeded
                                       `-> failed
 ```
 
-An interrupted process can leave `submitted` or `running` state. The prototype reports that state but does not implement resume.
+An interrupted direct Generation can remain `submitted` or `running`.
+Composed Workflow Generations checkpoint after every step and can be resumed
+with `mg generations resume <id>`.
 
 Record writes are atomic. The directory identity, inputs, and terminal outputs are immutable after completion. Edit and Recreate create new directories.
 
@@ -535,11 +584,27 @@ read linked pages with its own tools and incorporate relevant content into
 the Creative Brief; this avoids embedding a web crawler and its network
 security policy into the product.
 
+The Speech endpoint is the regional synthesis origin
+(`https://<region>.tts.speech.microsoft.com/`), not the general Cognitive
+Services resource URL. Updating that endpoint can retain the existing private
+key.
+
 The operation and resource structures are intentionally plural. Explainer
-video always runs Sora and stores an MP4. When Voice is selected, it also runs
-MAI-Voice-2 independently and stores an MP3. Deterministic transcription,
-local media muxing, and multi-scene composition can be added behind the
-Creation module without widening `MediaGenApplication`.
+video exposes only `visuals` and Voice routing as Scenario setup. Its internal
+planning step selects the first eligible configured text deployment, while its
+generated style reference uses the normal Image Generator Auto route. Neither
+internal role is persisted as Scenario routing or shown as a user-provided
+reference requirement. User Reference Assets remain normal Generation inputs.
+The Workflow creates a semantic scene plan, one shared style reference,
+normalizes that image to the selected Sora frame dimensions, creates
+model-supported video clips and per-scene MAI-Voice-2 narration. Local
+composition produces one final MP4; intermediate images, clips, and MP3 files
+remain private working artifacts. Internal Model Prompts are assembled only
+inside step handlers and are never checkpointed.
+
+Generated reference images and scene clips use cover scaling with centered
+crop. Media Gen does not introduce padding, preventing reference borders from
+propagating into Sora outputs and avoiding final letterboxing.
 
 ## CLI contract
 
@@ -585,6 +650,10 @@ Permanent deletion, export overwrite, and fallback-model retry require `--force`
 - exposes a small command-oriented HTTP adapter over `MediaGenApplication`
 - serves static UI assets from the npm package
 - runs in the foreground until stopped
+- starts Explainer Workflows in the background and returns HTTP 202 with the
+  created Generation so the browser can poll filesystem-backed progress
+- resumes failed or interrupted Workflow Generations in the background through
+  the same polling contract
 
 The prototype has no LAN mode and no product authentication.
 

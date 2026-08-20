@@ -2,7 +2,7 @@ import {mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {afterEach, describe, expect, test} from 'vitest'
+import {afterEach, describe, expect, test, vi} from 'vitest'
 
 import {createMediaGenApplication} from '../../src/application/media-gen-application.js'
 import type {
@@ -127,7 +127,7 @@ describe('LocalServer', () => {
       method: 'POST',
       url: '/api/scenarios/short-form-video/disable',
     })
-    await server.inject({
+    const createResponse = await server.inject({
       body: {
         force: false,
         request: {
@@ -136,10 +136,12 @@ describe('LocalServer', () => {
           kind: 'scenario',
           options: {
             'aspect-ratio': '16:9',
-            duration: 12,
-            narration: 'Narration script.',
+            duration: 20,
             subtitles: true,
-            voice: 'en-US-Harper:MAI-Voice-2',
+            voice: {
+              id: 'en-US-Harper:MAI-Voice-2',
+              mode: 'selected',
+            },
           },
           preset: 'editorial-motion-graphics',
           scenario: 'explainer-video',
@@ -156,6 +158,7 @@ describe('LocalServer', () => {
       method: 'POST',
       url: '/api/create',
     })
+    expect(createResponse.statusCode).toBe(202)
 
     expect(commands).toEqual([
       {type: 'scenarios-list'},
@@ -171,6 +174,7 @@ describe('LocalServer', () => {
         type: 'scenarios-set-enabled',
       },
       {
+        background: true,
         force: false,
         request: {
           creativeBrief: 'Explain retrieval-augmented generation.',
@@ -178,10 +182,12 @@ describe('LocalServer', () => {
           kind: 'scenario',
           options: {
             'aspect-ratio': '16:9',
-            duration: 12,
-            narration: 'Narration script.',
+            duration: 20,
             subtitles: true,
-            voice: 'en-US-Harper:MAI-Voice-2',
+            voice: {
+              id: 'en-US-Harper:MAI-Voice-2',
+              mode: 'selected',
+            },
           },
           preset: 'editorial-motion-graphics',
           scenario: 'explainer-video',
@@ -233,6 +239,231 @@ describe('LocalServer', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['content-type']).toContain('image/png')
     expect(response.body).toBe('image bytes')
+    await server.close()
+  })
+
+  test('streams a Generation Reference Asset by scoped index', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-gen-input-'))
+    temporaryDirectories.push(root)
+    const inputPath = join(root, 'product.png')
+    await writeFile(inputPath, 'input bytes', 'utf8')
+    const server = createLocalServer({
+      application: {
+        execute: async () => ({
+          generation: {
+            ...generationRecord('01GENERATION'),
+            references: [
+              {
+                mediaType: 'image/png',
+                modifiedAt: '2026-08-20T12:00:00.000Z',
+                path: inputPath,
+                sha256: 'input-sha',
+                size: 11,
+              },
+            ],
+          },
+          referenceStates: [{path: inputPath, state: 'present'}],
+          type: 'generations-get',
+        }),
+      },
+      context: {
+        bin: 'mg',
+        cwd: 'C:\\work',
+        mediaGenHome: 'C:\\home',
+      },
+    })
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/generations/01GENERATION/references/0',
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['content-type']).toContain('image/png')
+    expect(response.body).toBe('input bytes')
+    await server.close()
+  })
+
+  test('browses local reference files and streams selected image previews', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-gen-reference-'))
+    temporaryDirectories.push(root)
+    const imagePath = join(root, 'product.png')
+    const documentPath = join(root, 'brand-guide.pdf')
+    await writeFile(imagePath, 'image bytes', 'utf8')
+    await writeFile(documentPath, 'document bytes', 'utf8')
+    const browseReferenceFiles = vi.fn(
+      async () => [imagePath, documentPath],
+    )
+    const server = createLocalServer({
+      application: {
+        execute: async () => {
+          throw new Error('The file picker must stay in the HTTP adapter')
+        },
+      },
+      browseReferenceFiles,
+      context: {
+        bin: 'mg',
+        cwd: 'C:\\work',
+        mediaGenHome: 'C:\\home',
+      },
+    })
+
+    const browseResponse = await server.inject({
+      method: 'POST',
+      url: '/api/reference-files/browse',
+    })
+
+    expect(browseResponse.statusCode).toBe(200)
+    expect(browseReferenceFiles).toHaveBeenCalledWith({
+      multiple: true,
+      title: 'Choose reference files',
+    })
+    const browseResult = browseResponse.json()
+    expect(browseResult).toMatchObject({
+      files: [
+        {
+          mediaType: 'image/png',
+          name: 'product.png',
+          path: imagePath,
+        },
+        {
+          mediaType: 'application/pdf',
+          name: 'brand-guide.pdf',
+          path: documentPath,
+        },
+      ],
+      type: 'reference-files-browse',
+    })
+    expect(browseResult.files[0].previewUrl).toMatch(
+      /^\/api\/reference-files\/previews\//,
+    )
+    expect(browseResult.files[1].previewUrl).toBeUndefined()
+
+    const previewResponse = await server.inject({
+      method: 'GET',
+      url: browseResult.files[0].previewUrl,
+    })
+    expect(previewResponse.statusCode).toBe(200)
+    expect(previewResponse.headers['content-type']).toContain(
+      'image/png',
+    )
+    expect(previewResponse.body).toBe('image bytes')
+    await server.close()
+  })
+
+  test('restricts the source-video picker to MP4 and MOV files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-gen-source-video-'))
+    temporaryDirectories.push(root)
+    const imagePath = join(root, 'product.png')
+    await writeFile(imagePath, 'image bytes', 'utf8')
+    const browseReferenceFiles = vi.fn(async () => [imagePath])
+    const server = createLocalServer({
+      application: {
+        execute: async () => {
+          throw new Error('The file picker must stay in the HTTP adapter')
+        },
+      },
+      browseReferenceFiles,
+      context: {
+        bin: 'mg',
+        cwd: 'C:\\work',
+        mediaGenHome: 'C:\\home',
+      },
+    })
+
+    const response = await server.inject({
+      body: {purpose: 'source-video'},
+      method: 'POST',
+      url: '/api/reference-files/browse',
+    })
+
+    expect(browseReferenceFiles).toHaveBeenCalledWith({
+      extensions: ['.mp4', '.mov'],
+      multiple: false,
+      title: 'Choose source video',
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      code: 'invalid_source_video',
+      error: true,
+    })
+    await server.close()
+  })
+
+  test('rejects multiple files returned for one source video', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-gen-source-count-'))
+    temporaryDirectories.push(root)
+    const firstPath = join(root, 'first.mp4')
+    const secondPath = join(root, 'second.mov')
+    await writeFile(firstPath, 'first video', 'utf8')
+    await writeFile(secondPath, 'second video', 'utf8')
+    const server = createLocalServer({
+      application: {
+        execute: async () => {
+          throw new Error('The file picker must stay in the HTTP adapter')
+        },
+      },
+      browseReferenceFiles: async () => [firstPath, secondPath],
+      context: {
+        bin: 'mg',
+        cwd: 'C:\\work',
+        mediaGenHome: 'C:\\home',
+      },
+    })
+
+    const response = await server.inject({
+      body: {purpose: 'source-video'},
+      method: 'POST',
+      url: '/api/reference-files/browse',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      code: 'invalid_source_video',
+      error: true,
+      message: 'Choose exactly one source video',
+    })
+    await server.close()
+  })
+
+  test('evicts old local reference preview tokens', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'media-gen-preview-cap-'))
+    temporaryDirectories.push(root)
+    const imagePath = join(root, 'product.png')
+    await writeFile(imagePath, 'image bytes', 'utf8')
+    const server = createLocalServer({
+      application: {
+        execute: async () => {
+          throw new Error('The file picker must stay in the HTTP adapter')
+        },
+      },
+      browseReferenceFiles: async () => [imagePath],
+      context: {
+        bin: 'mg',
+        cwd: 'C:\\work',
+        mediaGenHome: 'C:\\home',
+      },
+    })
+
+    const previewUrls: string[] = []
+    for (let index = 0; index < 65; index += 1) {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/reference-files/browse',
+      })
+      previewUrls.push(response.json().files[0].previewUrl)
+    }
+
+    const evicted = await server.inject({
+      method: 'GET',
+      url: previewUrls[0]!,
+    })
+    const retained = await server.inject({
+      method: 'GET',
+      url: previewUrls.at(-1)!,
+    })
+    expect(evicted.statusCode).toBe(404)
+    expect(retained.statusCode).toBe(200)
     await server.close()
   })
 
@@ -314,11 +545,17 @@ describe('LocalServer', () => {
       method: 'POST',
       url: '/api/generations/01GENERATION/export',
     })
-    await server.inject({
+    const recreateResponse = await server.inject({
       body: {creativeBrief: 'Updated', style: 'cinematic'},
       method: 'POST',
       url: '/api/generations/01GENERATION/recreate',
     })
+    expect(recreateResponse.statusCode).toBe(200)
+    const resumeResponse = await server.inject({
+      method: 'POST',
+      url: '/api/generations/01GENERATION/resume',
+    })
+    expect(resumeResponse.statusCode).toBe(202)
     await server.inject({
       body: {creativeBrief: 'Edit this', style: 'product-led'},
       method: 'POST',
@@ -365,10 +602,16 @@ describe('LocalServer', () => {
         type: 'generations-export',
       },
       {
+        background: true,
         creativeBrief: 'Updated',
         id: '01GENERATION',
         style: 'cinematic',
         type: 'generations-recreate',
+      },
+      {
+        background: true,
+        id: '01GENERATION',
+        type: 'generations-resume',
       },
       {
         creativeBrief: 'Edit this',
@@ -560,6 +803,7 @@ describe('LocalServer', () => {
 
 function generationRecord(id: string) {
   return {
+    controls: {},
     createdAt: '2026-08-18T12:00:00.000Z',
     creativeBrief: 'Show the dashboard at launch.',
     error: null,
@@ -587,7 +831,7 @@ function generationRecord(id: string) {
     ],
     runtime: {catalogVersion: '4', cliVersion: '0.0.0'},
     scenario: null,
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
     selection: {
       generator: 'image' as const,
       kind: 'generator' as const,
@@ -623,10 +867,6 @@ function resultFor(command: MediaGenCommand): MediaGenResult {
             missingRoles: ['visuals'],
             state: 'not-ready',
           },
-          roleMediaTypes: {
-            visuals: 'video',
-            voice: 'audio',
-          },
           routingRoles: ['visuals'],
           title: 'Explainer video',
         },
@@ -641,6 +881,7 @@ function resultFor(command: MediaGenCommand): MediaGenResult {
     case 'generations-get':
       return {
         generation: generationRecord(command.id),
+        referenceStates: [],
         type: 'generations-get',
       }
     case 'generations-delete':
@@ -659,6 +900,11 @@ function resultFor(command: MediaGenCommand): MediaGenResult {
       return {
         generation: generationRecord('01RECREATED'),
         type: 'generations-recreate',
+      }
+    case 'generations-resume':
+      return {
+        generation: generationRecord(command.id),
+        type: 'generations-resume',
       }
     case 'generations-edit':
       return {
@@ -686,6 +932,10 @@ function resultFor(command: MediaGenCommand): MediaGenResult {
     case 'settings-get':
       return {
         auth: {help: [], state: 'signed-out'},
+        catalog: {
+          videoModels: [],
+          voices: [],
+        },
         manifest: {
           deployments: {},
           export: {},

@@ -1,18 +1,16 @@
-import {randomUUID} from 'node:crypto'
 import {
   mkdir,
   readFile,
   readdir,
-  rename,
   rm,
-  writeFile,
 } from 'node:fs/promises'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
 import {z} from 'zod'
 
 import {MediaGenError} from '../application/media-gen-error.js'
 import {withFileLock} from '../workspace/file-lock.js'
+import {writeJsonAtomic} from '../workspace/atomic-json.js'
 import type {MediaType} from '../catalog/models.js'
 import type {TextReferenceRecord} from './text-reference.js'
 import type {WebReference} from './web-reference.js'
@@ -72,6 +70,7 @@ export interface GenerationScenario {
 }
 
 export interface GenerationRecord {
+  controls: Record<string, unknown>
   createdAt: string
   creativeBrief: string
   error: null | {
@@ -104,7 +103,7 @@ export interface GenerationRecord {
     cliVersion: string
   }
   scenario: GenerationScenario | null
-  schemaVersion: 4
+  schemaVersion: 5
   selection: GenerationSelection
   sourceGenerations: string[]
   status: GenerationStatus
@@ -129,6 +128,7 @@ export type CreateGenerationInput = Pick<
       | 'progress'
       | 'resolvedResources'
       | 'scenario'
+      | 'controls'
       | 'textReferences'
       | 'webReferences'
     >
@@ -161,6 +161,7 @@ export function createGenerationStore(
       const directory = join(workspacePath, 'generations', id)
       const record: GenerationRecord = {
         ...input,
+        controls: input.controls ?? {},
         createdAt: timestamp,
         error: null,
         id,
@@ -181,11 +182,11 @@ export function createGenerationStore(
             },
           ],
         runtime: {
-          catalogVersion: '4',
+          catalogVersion: '5',
           cliVersion: '0.1.1',
         },
         scenario: input.scenario ?? null,
-        schemaVersion: 4,
+        schemaVersion: 5,
         status: 'created',
         textReferences: input.textReferences ?? [],
         updatedAt: timestamp,
@@ -325,6 +326,7 @@ const webReferenceSchema = z.object({
 })
 
 const generationRecordSchema = z.object({
+  controls: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
   creativeBrief: z.string(),
   error: z
@@ -370,7 +372,7 @@ const generationRecordSchema = z.object({
       options: z.record(z.string(), z.unknown()),
     })
     .nullable(),
-  schemaVersion: z.literal(4),
+  schemaVersion: z.literal(5),
   selection: generationSelectionSchema,
   sourceGenerations: z.array(z.string()),
   status: z.enum([
@@ -387,7 +389,16 @@ const generationRecordSchema = z.object({
   webReferences: z.array(webReferenceSchema),
 })
 
-const version3GenerationRecordSchema = generationRecordSchema
+const version4GenerationRecordSchema = generationRecordSchema
+  .omit({
+    controls: true,
+    schemaVersion: true,
+  })
+  .extend({
+    schemaVersion: z.literal(4),
+  })
+
+const version3GenerationRecordSchema = version4GenerationRecordSchema
   .omit({
     schemaVersion: true,
     textReferences: true,
@@ -508,16 +519,18 @@ async function readGenerationRecord(
     value.schemaVersion === 1
   ) {
     const legacy = legacyGenerationRecordSchema.parse(value)
-    return upgradeToVersion4(
-      upgradeToVersion3({
-        ...legacy,
-        schemaVersion: 2,
-        selection: {
-          generator: legacy.mediaType,
-          kind: 'generator',
-          style: legacy.selection.style,
-        },
-      }),
+    return upgradeToVersion5(
+      upgradeToVersion4(
+        upgradeToVersion3({
+          ...legacy,
+          schemaVersion: 2,
+          selection: {
+            generator: legacy.mediaType,
+            kind: 'generator',
+            style: legacy.selection.style,
+          },
+        }),
+      ),
     )
   }
 
@@ -527,9 +540,11 @@ async function readGenerationRecord(
     'schemaVersion' in value &&
     value.schemaVersion === 2
   ) {
-    return upgradeToVersion4(
-      upgradeToVersion3(
-        version2GenerationRecordSchema.parse(value),
+    return upgradeToVersion5(
+      upgradeToVersion4(
+        upgradeToVersion3(
+          version2GenerationRecordSchema.parse(value),
+        ),
       ),
     )
   }
@@ -540,8 +555,21 @@ async function readGenerationRecord(
     'schemaVersion' in value &&
     value.schemaVersion === 3
   ) {
-    return upgradeToVersion4(
-      version3GenerationRecordSchema.parse(value),
+    return upgradeToVersion5(
+      upgradeToVersion4(
+        version3GenerationRecordSchema.parse(value),
+      ),
+    )
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'schemaVersion' in value &&
+    value.schemaVersion === 4
+  ) {
+    return upgradeToVersion5(
+      version4GenerationRecordSchema.parse(value),
     )
   }
 
@@ -578,8 +606,8 @@ function upgradeToVersion3(
 
 function upgradeToVersion4(
   record: z.infer<typeof version3GenerationRecordSchema>,
-): GenerationRecord {
-  return generationRecordSchema.parse({
+): z.infer<typeof version4GenerationRecordSchema> {
+  return version4GenerationRecordSchema.parse({
     ...record,
     runtime: {
       ...record.runtime,
@@ -588,15 +616,19 @@ function upgradeToVersion4(
     schemaVersion: 4,
     textReferences: [],
     webReferences: [],
-  }) as GenerationRecord
+  })
 }
 
-async function writeJsonAtomic(
-  path: string,
-  value: unknown,
-): Promise<void> {
-  await mkdir(dirname(path), {recursive: true})
-  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
-  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  await rename(temporaryPath, path)
+function upgradeToVersion5(
+  record: z.infer<typeof version4GenerationRecordSchema>,
+): GenerationRecord {
+  return generationRecordSchema.parse({
+    ...record,
+    controls: {},
+    runtime: {
+      ...record.runtime,
+      catalogVersion: '5',
+    },
+    schemaVersion: 5,
+  }) as GenerationRecord
 }

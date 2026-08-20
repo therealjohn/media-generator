@@ -24,6 +24,19 @@ export function generationStyleLabel(
   )
 }
 
+export function generationPresetLabel(
+  generation: GenerationRecord,
+): string | undefined {
+  if (
+    generation.selection.kind !== 'scenario' ||
+    generation.selection.preset === undefined
+  ) {
+    return undefined
+  }
+  const presetId = generation.selection.preset
+  return humanize(presetId)
+}
+
 function humanize(value: string): string {
   const words = value.replaceAll('-', ' ')
   return words.charAt(0).toUpperCase() + words.slice(1)

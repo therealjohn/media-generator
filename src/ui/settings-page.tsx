@@ -154,7 +154,7 @@ export function SettingsPage() {
 
   return (
     <main className="w-full px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
-      <header className="mb-8">
+      <header className="mx-auto mb-8 max-w-5xl">
         <p className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
           Workspace configuration
         </p>
@@ -167,7 +167,10 @@ export function SettingsPage() {
         </p>
       </header>
 
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(360px,0.7fr)_minmax(0,1.3fr)]">
+      <div
+        className="mx-auto grid max-w-5xl gap-6"
+        data-layout="settings-stack"
+      >
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
@@ -275,8 +278,8 @@ export function SettingsPage() {
               </div>
             </div>
             <CardDescription>
-              Save a project endpoint and discover supported image and
-              video deployments.
+              Save a project endpoint and discover supported media and
+              planning deployments.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-5">
@@ -454,14 +457,33 @@ export function SettingsPage() {
                     )}
                   </ul>
                   {configuration.result.unsupported.length > 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      {configuration.result.unsupported.length}{' '}
-                      unsupported deployment
-                      {configuration.result.unsupported.length === 1
-                        ? ''
-                        : 's'}{' '}
-                      was ignored.
-                    </p>
+                    <div className="grid gap-2">
+                      <p className="text-sm text-muted-foreground">
+                        {configuration.result.unsupported.length}{' '}
+                        unsupported deployment
+                        {configuration.result.unsupported.length === 1
+                          ? ''
+                          : 's'}{' '}
+                        was ignored.
+                      </p>
+                      <ul className="grid gap-2">
+                        {configuration.result.unsupported.map(
+                          (deployment) => (
+                            <li
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+                              key={`${deployment.deploymentName}:${deployment.model}`}
+                            >
+                              <strong className="text-sm font-medium">
+                                {deployment.model}
+                              </strong>
+                              <small className="text-xs text-muted-foreground">
+                                {deployment.deploymentName}
+                              </small>
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
                   ) : null}
                 </CardContent>
               </Card>
@@ -484,7 +506,7 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="xl:col-span-2">
+        <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted text-muted-foreground">
@@ -553,7 +575,7 @@ export function SettingsPage() {
             >
               <div className="grid gap-2 md:col-span-2">
                 <Label htmlFor="speech-endpoint">
-                  Azure Speech resource endpoint
+                  Azure Speech synthesis endpoint
                 </Label>
                 <Input
                   defaultValue={
@@ -563,7 +585,7 @@ export function SettingsPage() {
                   }
                   id="speech-endpoint"
                   name="endpoint"
-                  placeholder="https://example.cognitiveservices.azure.com/"
+                  placeholder="https://eastus2.tts.speech.microsoft.com/"
                   required
                   type="url"
                 />
@@ -576,12 +598,13 @@ export function SettingsPage() {
                   autoComplete="new-password"
                   id="speech-api-key"
                   name="apiKey"
-                  required
+                  required={settings?.speech?.configured !== true}
                   type="password"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Enter the key again whenever you update this
-                  connection.
+                  {settings?.speech?.configured === true
+                    ? 'Leave blank to keep the saved private key.'
+                    : 'Required for the initial Speech connection.'}
                 </p>
               </div>
               <div className="grid gap-2">

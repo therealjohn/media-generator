@@ -42,6 +42,10 @@
   `src/adapters/cli/command-help.ts`, and CLI tests together.
 - HTTP route: map it to a `MediaGenCommand` in
   `src/adapters/http/local-server.ts`; avoid duplicating application logic.
+  Presentation-only routes may remain adapter-local when they open an OS
+  picker or stream media already authorized by a scoped or opaque identifier;
+  they accept no caller-supplied filesystem path and perform no business
+  mutation.
 - Workspace schema: update `src/workspace/schemas.ts`, initialization defaults,
   and schema/application tests together.
 - Model: update `src/catalog/models.ts`, its typed adapter, runtime

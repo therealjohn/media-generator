@@ -202,7 +202,7 @@ describe('GenerationStore', () => {
         },
       ],
       scenario: null,
-      schemaVersion: 4,
+      schemaVersion: 5,
       selection: {
         generator: 'image',
         kind: 'generator',
@@ -254,7 +254,7 @@ describe('GenerationStore', () => {
     })
 
     expect(record).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       textReferences: [
         {
           path: 'inputs/text-reference-1.md',
@@ -266,6 +266,39 @@ describe('GenerationStore', () => {
       ],
     })
     expect(JSON.stringify(record)).not.toContain('Connect the SDK')
+  })
+
+  test('normalizes version 4 records with empty Generator controls', async () => {
+    const workspacePath = await mkdtemp(
+      join(tmpdir(), 'media-gen-generation-v4-'),
+    )
+    temporaryDirectories.push(workspacePath)
+    await mkdir(join(workspacePath, 'generations'))
+    const store = createGenerationStore(workspacePath, {
+      createId: () => '01V4',
+      now: () => new Date('2026-08-18T12:00:00.000Z'),
+    })
+    const current = await store.create(generationInput())
+    const legacy = {
+      ...current,
+      schemaVersion: 4,
+    } as Record<string, unknown>
+    delete legacy.controls
+    await writeFile(
+      join(
+        workspacePath,
+        'generations',
+        '01V4',
+        'generation.json',
+      ),
+      `${JSON.stringify(legacy, null, 2)}\n`,
+      'utf8',
+    )
+
+    await expect(store.get('01V4')).resolves.toMatchObject({
+      controls: {},
+      schemaVersion: 5,
+    })
   })
 
   test('normalizes legacy product marketing selections as generators', async () => {
@@ -315,7 +348,7 @@ describe('GenerationStore', () => {
     })
 
     await expect(store.get('01LEGACY')).resolves.toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       resolvedResources: [
         {
           id: 'primary:mai-fast',
@@ -330,7 +363,7 @@ describe('GenerationStore', () => {
     })
   })
 
-  test('normalizes version 2 Generator records as version 4 records', async () => {
+  test('normalizes version 2 Generator records as version 5 records', async () => {
     const workspacePath = await mkdtemp(
       join(tmpdir(), 'media-gen-generation-v2-'),
     )
@@ -380,7 +413,7 @@ describe('GenerationStore', () => {
         total: 1,
       },
       scenario: null,
-      schemaVersion: 4,
+      schemaVersion: 5,
       textReferences: [],
       webReferences: [],
     })
@@ -441,7 +474,7 @@ describe('GenerationStore', () => {
     })
 
     await expect(store.get('01V3')).resolves.toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       textReferences: [],
       webReferences: [],
     })

@@ -8,6 +8,7 @@ export type GenerationStatus =
   | 'validating'
 
 export interface GenerationRecord {
+  controls: Record<string, unknown>
   createdAt: string
   creativeBrief: string
   error: null | {
@@ -63,7 +64,7 @@ export interface GenerationRecord {
     inputs: Record<string, unknown>
     options: Record<string, unknown>
   }
-  schemaVersion: 4
+  schemaVersion: 5
   selection:
     | {
         generator: 'image' | 'video'
@@ -96,6 +97,11 @@ export interface GenerationsListResult {
 
 export interface GenerationsGetResult {
   generation: GenerationRecord
+  referenceStates: Array<
+    | {path: string; state: 'missing'}
+    | {path: string; state: 'present'}
+    | {currentSha256: string; path: string; state: 'changed'}
+  >
   type: 'generations-get'
 }
 
@@ -129,9 +135,11 @@ export type ScenarioCreateInput =
         options: {
           'aspect-ratio': '16:9' | '9:16'
           duration: number
-          narration?: string
           subtitles: boolean
-          voice?: string
+          voice:
+            | {mode: 'auto'}
+            | {mode: 'off'}
+            | {id: string; mode: 'selected'}
         }
         preset: string
         scenario: 'explainer-video'
@@ -187,6 +195,11 @@ export interface GenerationsRecreateResult {
   type: 'generations-recreate'
 }
 
+export interface GenerationsResumeResult {
+  generation: GenerationRecord
+  type: 'generations-resume'
+}
+
 export interface GenerationsReferenceResult {
   references: Array<{
     generationId: string
@@ -194,6 +207,16 @@ export interface GenerationsReferenceResult {
     path: string
   }>
   type: 'generations-reference'
+}
+
+export interface ReferenceFilesBrowseResult {
+  files: Array<{
+    mediaType: string
+    name: string
+    path: string
+    previewUrl?: string
+  }>
+  type: 'reference-files-browse'
 }
 
 export interface GenerationsExportResult {
@@ -227,7 +250,7 @@ export interface ConfigureFoundryResult {
     adapter: string
     deploymentName: string
     id: string
-    mediaType: 'image' | 'video'
+    mediaType: 'audio' | 'image' | 'text' | 'video'
     model: string
   }>
   provider: {
@@ -260,11 +283,31 @@ export interface SettingsGetResult {
         help: string[]
         state: 'signed-out' | 'unavailable'
       }
+  catalog: {
+    videoModels: Array<{
+      clipDurationsSeconds: number[]
+      composableDurationsSeconds: number[]
+      explainerDurationPresetsSeconds: number[]
+      manualDuration: {
+        maxSeconds: number
+        minSeconds: number
+      }
+      maxConcurrentRequests: number
+      model: string
+      preferredClipSeconds: number
+    }>
+    voices: Array<{
+      id: string
+      label: string
+      model: 'MAI-Voice-2'
+    }>
+  }
   manifest: {
     deployments: Record<
       string,
       {
         adapter:
+          | 'azure-openai-chat'
           | 'azure-openai-image'
           | 'bfl-flux'
           | 'mai-image'
@@ -361,6 +404,9 @@ export class ApiError extends Error {
 
 export interface ApiClient {
   addReferences(ids: string[]): Promise<GenerationsReferenceResult>
+  browseReferenceFiles(
+    purpose?: 'references' | 'source-video',
+  ): Promise<ReferenceFilesBrowseResult>
   configureFoundry(input: {
     endpoint: string
     name: string
@@ -392,6 +438,7 @@ export interface ApiClient {
     id: string,
     input: GenerationReuseInput,
   ): Promise<GenerationsRecreateResult>
+  resumeGeneration(id: string): Promise<GenerationsResumeResult>
   setScenarioEnabled(
     id: ScenarioView['id'],
     enabled: boolean,
@@ -413,6 +460,16 @@ export function createApiClient(
         '/api/references',
         {
           body: JSON.stringify({ids}),
+          headers: {'Content-Type': 'application/json'},
+          method: 'POST',
+        },
+      ),
+    browseReferenceFiles: (purpose = 'references') =>
+      request<ReferenceFilesBrowseResult>(
+        fetchImplementation,
+        '/api/reference-files/browse',
+        {
+          body: JSON.stringify({purpose}),
           headers: {'Content-Type': 'application/json'},
           method: 'POST',
         },
@@ -506,6 +563,12 @@ export function createApiClient(
           headers: {'Content-Type': 'application/json'},
           method: 'POST',
         },
+      ),
+    resumeGeneration: (id) =>
+      request<GenerationsResumeResult>(
+        fetchImplementation,
+        `/api/generations/${encodeURIComponent(id)}/resume`,
+        {method: 'POST'},
       ),
     setScenarioEnabled: (id, enabled) =>
       request(

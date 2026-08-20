@@ -14,17 +14,24 @@
   selection, source inputs, Production Options, model readiness, enablement,
   and Scenario submission.
 - Phase 12 Reference Source support is complete: CLI-only Web Reference URLs,
-  pasted plain text and Markdown Text References in the Local UI, private
-  Generation input files, version 4 records, Recreate preservation, and
+  pasted Text References in the Local UI, private Generation input files,
+  version 4 records, Recreate preservation, and
   transient prompt grounding.
+- Generation record version 5 persists normalized Generator controls so
+  Image and Video detail views can report their production choices.
 - Phase 13 MAI Voice support is complete: private Azure Speech endpoint and
   API-key configuration, Azure Speech SSML synthesis, Local Profile resolution
-  for the Explainer `voice` role, narration-script controls, MP3 outputs,
+  for the Explainer `voice` role, per-scene narration generation, MP3 outputs,
   audio playback, and real MAI voice IDs.
+- Phase 14 composed Workflow support is complete: a reusable typed workflow
+  framework, structured planning, model capability profiles in JSON, one
+  generated Explainer style reference, model-supported scene fan-out, Auto
+  Voice with explicit Off, bundled FFmpeg composition, background Local UI
+  execution, persisted progress, and resume.
 - Live model execution requires a user-provided Foundry project endpoint,
   accessible image or video deployments, Azure CLI, and appropriate RBAC.
-  Optional Explainer narration additionally requires a private Azure Speech
-  Connection.
+  Default Explainer narration additionally requires a private Azure Speech
+  Connection; selecting Voice Off removes that requirement for the request.
 
 ## Delivery strategy
 
@@ -293,8 +300,8 @@ UI navigation.
 
 ## Deferred roadmap
 
-1. Deterministic transcription, subtitle composition, and audio/video muxing.
-2. Multi-scene Scenario orchestration and local media composition.
+1. Deterministic transcription for source-video workflows.
+2. Additional composed Scenario definitions over the Workflow module.
 3. Custom Scenario packages and workspace overrides.
 4. User-saved Presets.
 5. Stability AI adapters.

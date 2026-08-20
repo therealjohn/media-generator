@@ -38,6 +38,8 @@ Media Gen has two creation entry points:
 A Generator exposes recommended Styles directly. A Scenario exposes
 Scenario-specific Presets and Production Options. Scenario names describe
 the deliverable instead of introducing productized names such as "Studio."
+Preset tiles use short end-user descriptions. Detailed rendering guidance is
+internal Model Prompt material and is never returned as Preset display copy.
 
 ### Model choice remains accessible
 
@@ -88,6 +90,13 @@ The Local UI accepts local Reference Assets, prior Generation outputs, and
 pasted Text References. Web References are CLI-only provenance: agents read
 the URL with their own tools and incorporate relevant content into the
 Creative Brief or a Text Reference.
+
+Image and Video keep Model selection visible because it is an optional
+Generator refinement. Their Reference Sources sit with the Creative Brief,
+and recommended Styles use user-facing choice cards. Scenario model selection
+remains under Advanced. Short-form video uses a dedicated one-video source
+selector for local MP4/MOV files or prior Video Generations; optional pasted
+text remains separate context.
 
 ### 2. Generations
 
@@ -160,16 +169,37 @@ The built-in purpose-specific Scenarios are:
 
 | Scenario | Core input | Example Presets | Production Options |
 | --- | --- | --- | --- |
-| Explainer video | Topic and optional image or video reference | Editorial motion graphics, Stickman cartoon, Watercolor chronicle | Optional MAI voice and narration, subtitles, duration, aspect ratio |
+| Explainer video | Topic and optional Reference Sources | Editorial motion graphics, Stickman cartoon, Watercolor chronicle | Selected default or alternate MAI Voice, Voice Off, subtitles, model-derived total duration, aspect ratio |
 | Short-form video | Source video | Bold urban, Green contrast, Marker scribble | Language, captions, orientation |
 
 Both Scenarios execute through the CLI. Short-form video uses a routed Sora
-deployment for remix and variants. Explainer video resolves `visuals` from
-workspace deployment routing and creates a Sora MP4. Voice is disabled by
-default; when selected, the Scenario resolves `voice` from the private Speech
-Connection and adds a MAI-Voice-2 MP3. The narration script defaults to the
-Creative Brief. Subtitle generation and audio/video muxing remain
-non-deterministic post-production gaps.
+deployment for remix and variants. Explainer video exposes only video and
+Voice choices. Planning automatically selects an eligible configured text
+deployment, and the generated style reference uses the normal Image Generator
+Auto route. The generated reference remains a private workflow artifact rather
+than Scenario setup; user Reference Sources remain independent inputs. CLI Voice can use Auto to resolve the private Speech Connection's default
+MAI-Voice-2 Voice. The Local UI selects that default Voice by name; Off omits
+narration.
+
+The Explainer Workflow asks the planning model for an exact-duration scene
+plan using clip lengths supported by the selected video model. It generates
+one shared style reference, fans out scene video and Voice work with bounded
+concurrency, burns deterministic subtitles when selected, mixes narration,
+and publishes one composed MP4. Intermediate images, clips, and audio remain
+private. The Local UI receives the Generation immediately, shows that it is in
+progress without exposing Workflow steps, and can resume failed work.
+Narration is authored by the planner per scene; there is no single user-supplied
+narration script Production Option.
+
+Explainer keeps Reference Source actions in the prompt toolbar. Its primary
+Production controls are Voice, aspect ratio, duration, and subtitles; video
+model selection is an Advanced control. The configured Voice is selected
+directly instead of exposing provider or Auto-routing terminology.
+
+Generation details show user intent, selected Preset or Style, production
+choices, output dimensions, and all Reference Source types. Settings uses one
+stacked reading column so authentication, Foundry, and Speech configuration
+retain consistent width and order.
 
 ## Prompt behavior
 
@@ -184,16 +214,23 @@ For a Generator, the CLI combines:
 into a transient **Model Prompt**.
 
 A Scenario combines its own workflow instructions, selected Preset,
-Production Options, references, and model guidance. Generation records track
-resolved resources, operations, and progress so a future Scenario can
-coordinate multiple provider or local-processing operations without changing
-the application interface.
+Production Options, references, and model guidance. Composed Scenarios are
+typed definitions over the reusable Workflow module, which owns scheduling,
+artifacts, progress, background execution, and resume without changing the
+application interface.
 
 The Model Prompt is not shown or persisted. Generation records retain the Creative Brief, selected choices, model/deployment identity, CLI version, and built-in catalog version.
 
 ## Model scope
 
 Initial typed adapters support:
+
+### Structured planning
+
+- `gpt-4.1`
+- `gpt-4.1-mini`
+- `gpt-5.4`
+- `gpt-5.4-mini`
 
 ### Images
 
@@ -237,11 +274,10 @@ Deferred until the Foundry contract is verified:
 - product sign-in
 - custom Scenarios
 - saved Presets
-- deterministic transcription, caption composition, and audio/video muxing
-- multi-scene Scenario orchestration
+- deterministic transcription for source-video workflows
 - automatic fallback
 - cost estimation and approval gates
-- detach, watch, or resume commands
+- generic detach and watch commands for direct Generations
 - uniform Azure AI Content Safety integration
 - product telemetry
 - desktop packaging

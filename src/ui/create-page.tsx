@@ -50,6 +50,8 @@ import {
   type GenerationRecord,
   type SettingsGetResult,
 } from './api-client.js'
+import {ChoiceCardGrid} from './choice-card-grid.js'
+import {ModelSelection} from './model-selection.js'
 import {
   ReferencePicker,
   type ReferenceSelection,
@@ -79,29 +81,6 @@ const generators: Array<{
   },
 ]
 
-const maiVoiceOptions = [
-  {
-    id: 'en-US-Harper:MAI-Voice-2',
-    label: 'Harper · English (US)',
-  },
-  {
-    id: 'en-US-Ethan:MAI-Voice-2',
-    label: 'Ethan · English (US)',
-  },
-  {
-    id: 'en-US-Grant:MAI-Voice-2',
-    label: 'Grant · English (US)',
-  },
-  {
-    id: 'en-US-Iris:MAI-Voice-2',
-    label: 'Iris · English (US)',
-  },
-  {
-    id: 'en-US-Olivia:MAI-Voice-2',
-    label: 'Olivia · English (US)',
-  },
-]
-
 const api = createApiClient()
 
 export function CreatePage() {
@@ -111,8 +90,7 @@ export function CreatePage() {
     'explainer-video' | 'short-form-video' | null
   >(null)
   const [presetId, setPresetId] = useState('')
-  const [voice, setVoice] = useState('none')
-  const [narration, setNarration] = useState('')
+  const [voice, setVoice] = useState('off')
   const [subtitles, setSubtitles] = useState(true)
   const [orientation, setOrientation] = useState<
     'horizontal' | 'vertical'
@@ -126,6 +104,8 @@ export function CreatePage() {
   const [style, setStyle] = useState(defaultStyleFor('image'))
   const [aspectRatio, setAspectRatio] = useState('1:1')
   const [duration, setDuration] = useState(5)
+  const [explainerDurationChoice, setExplainerDurationChoice] =
+    useState('60')
   const [deploymentId, setDeploymentId] = useState('')
   const [references, setReferences] = useState<ReferenceSelection[]>(
     () =>
@@ -148,7 +128,13 @@ export function CreatePage() {
   const activeScenario = settings?.scenarios?.find(
     (scenario) => scenario.id === scenarioId,
   )
-  const scenarioRole = activeScenario?.routingRoles[0]
+  const activeGenerator = generators.find(
+    (generator) => generator.mediaType === mediaType,
+  )!
+  const scenarioRole =
+    activeScenario?.id === 'explainer-video'
+      ? 'visuals'
+      : activeScenario?.routingRoles[0]
   const route =
     activeScenario === undefined
       ? settings?.manifest?.routing?.generators?.[mediaType]?.auto ?? []
@@ -185,12 +171,28 @@ export function CreatePage() {
   const autoDeployment = deployments[route[0] ?? '']
   const activeDeployment =
     deployments[deploymentId] ?? autoDeployment
+  const activeVideoProfile = settings?.catalog?.videoModels.find(
+    (profile) => profile.model === activeDeployment?.model,
+  )
+  const voiceOptions = settings?.catalog?.voices ?? []
   const selectedRouteIndex = route.indexOf(deploymentId)
   const configuredSpeech =
     settings?.speech?.configured === true
       ? settings.speech
       : undefined
   const availableScenarios = settings?.scenarios ?? []
+  const activeMissingRoles =
+    activeScenario?.readiness.missingRoles.filter(
+      (role) =>
+        role !== 'planning' &&
+        role !== 'reference-image' &&
+        !(
+          activeScenario.id === 'explainer-video' &&
+          voice === 'off' &&
+          role === 'voice'
+        ),
+    ) ?? []
+  const activeScenarioReady = activeMissingRoles.length === 0
 
   useEffect(() => {
     let active = true
@@ -212,6 +214,7 @@ export function CreatePage() {
     setScenarioId(null)
     setMediaType(nextMediaType)
     setAspectRatio(nextMediaType === 'image' ? '1:1' : '16:9')
+    setDuration(nextMediaType === 'video' ? 8 : 5)
     setDeploymentId('')
     setStyle(defaultStyleFor(nextMediaType))
     setReferences([])
@@ -228,13 +231,17 @@ export function CreatePage() {
     )
     setPresetId(scenario?.presets[0]?.id ?? '')
     setAspectRatio('16:9')
-    setDuration(12)
+    setDuration(nextScenarioId === 'explainer-video' ? 60 : 12)
+    setExplainerDurationChoice('60')
     setDeploymentId('')
     setStyle(defaultStyleFor('video'))
     setReferences([])
     setTextReferences([])
-    setVoice('none')
-    setNarration('')
+    setVoice(
+      settings?.speech?.configured === true
+        ? settings.speech.defaultVoice
+        : 'off',
+    )
     setSubtitles(true)
     setOrientation('vertical')
     setLanguage('auto')
@@ -296,14 +303,12 @@ export function CreatePage() {
                       aspectRatio === '9:16' ? '9:16' : '16:9',
                     duration,
                     subtitles,
-                    ...(voice === 'none'
-                      ? {}
-                      : {
-                          ...(narration.trim().length === 0
-                            ? {}
-                            : {narration: narration.trim()}),
-                          voice,
-                        }),
+                    voice:
+                      voice === 'off'
+                        ? {mode: 'off'}
+                        : voice === 'auto'
+                          ? {mode: 'auto'}
+                          : {id: voice, mode: 'selected'},
                   },
                   preset:
                     presetId ||
@@ -506,6 +511,7 @@ export function CreatePage() {
         className="grid min-w-0 xl:grid-cols-[minmax(0,1fr)_390px]"
         onSubmit={handleSubmit}
       >
+        <input name="style" type="hidden" value={style} />
         <section className="relative overflow-hidden px-5 py-12 sm:px-8 lg:px-12 lg:py-16 xl:px-16 xl:py-20">
           <div
             aria-hidden="true"
@@ -519,68 +525,14 @@ export function CreatePage() {
                 : 'Purpose-built workflow'}
             </div>
             <h1 className="max-w-3xl font-heading text-4xl leading-none font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
-              {activeScenario?.title ?? 'What are you trying to make?'}
+              {activeScenario?.title ?? activeGenerator.title}
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
               {activeScenario?.description ??
-                'Describe the outcome in your own words. Refine the direction only where it changes the result.'}
+                activeGenerator.description}
             </p>
 
-            {activeScenario === undefined ? (
-              <div
-                aria-label="Media type"
-                className="mt-7 inline-flex gap-1 rounded-xl border bg-muted/40 p-1"
-                role="group"
-              >
-                <Button
-                  aria-pressed={mediaType === 'image'}
-                  onClick={() => selectMediaType('image')}
-                  type="button"
-                  variant={
-                    mediaType === 'image' ? 'secondary' : 'ghost'
-                  }
-                >
-                  <ImageIcon aria-hidden="true" />
-                  Image
-                </Button>
-                <Button
-                  aria-pressed={mediaType === 'video'}
-                  onClick={() => selectMediaType('video')}
-                  type="button"
-                  variant={
-                    mediaType === 'video' ? 'secondary' : 'ghost'
-                  }
-                >
-                  <Video aria-hidden="true" />
-                  Video
-                </Button>
-              </div>
-            ) : null}
-
-            {activeScenario?.id === 'short-form-video' ? (
-              <Card className="mt-7 bg-card/90">
-                <CardHeader>
-                  <CardTitle>
-                    <h2>Source video</h2>
-                  </CardTitle>
-                  <CardDescription>
-                    Add one MP4 or MOV source video.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ReferencePicker
-                    onChange={(nextReferences) =>
-                      setReferences(nextReferences.slice(0, 1))
-                    }
-                    onTextReferencesChange={setTextReferences}
-                    textReferences={textReferences}
-                    value={references}
-                  />
-                </CardContent>
-              </Card>
-            ) : null}
-
-            <Card className="mt-5 bg-card/90 shadow-2xl shadow-black/10 backdrop-blur">
+            <Card className="mt-7 bg-card/90 shadow-2xl shadow-black/10 backdrop-blur">
               <CardContent className="grid gap-3">
                 <Label htmlFor="creative-brief">
                   {activeScenario?.id === 'explainer-video'
@@ -604,117 +556,106 @@ export function CreatePage() {
                   }
                   required={activeScenario?.id !== 'short-form-video'}
                 />
-              </CardContent>
-            </Card>
-
-            {activeScenario?.id === 'explainer-video' ? (
-              <Card className="mt-5 bg-card/90">
-                <CardHeader>
-                  <CardTitle>
-                    <h2>Source material</h2>
-                  </CardTitle>
-                  <CardDescription>
-                    Optionally add one image or video reference.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
+                {activeScenario?.id === 'short-form-video' ? (
+                  <>
+                    <ReferencePicker
+                      compact
+                      onChange={setReferences}
+                      purpose="source-video"
+                      value={references}
+                    />
+                    <ReferencePicker
+                      compact
+                      onChange={() => undefined}
+                      onTextReferencesChange={setTextReferences}
+                      purpose="text-context"
+                      textReferences={textReferences}
+                      value={[]}
+                    />
+                  </>
+                ) : (
                   <ReferencePicker
-                    onChange={(nextReferences) =>
-                      setReferences(nextReferences.slice(0, 1))
-                    }
+                    compact
+                    onChange={setReferences}
                     onTextReferencesChange={setTextReferences}
                     textReferences={textReferences}
                     value={references}
                   />
-                </CardContent>
-              </Card>
-            ) : null}
+                )}
+              </CardContent>
+            </Card>
 
-            {activeScenario !== undefined ? (
-              <section aria-label="Presets" className="mt-8">
-                <div>
-                  <h2 className="font-heading text-2xl font-semibold">
-                    Presets
-                  </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Choose the visual treatment for this workflow.
-                  </p>
-                </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {activeScenario.presets.map((preset, index) => {
-                    const selected =
-                      preset.id ===
-                      (presetId || activeScenario.presets[0]?.id)
-                    return (
-                      <Button
-                        aria-pressed={selected}
-                        className={`group relative h-auto min-h-36 min-w-0 items-end justify-start overflow-hidden whitespace-normal p-0 text-left transition ${
-                          selected
-                            ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-background shadow-lg shadow-primary/15'
-                            : 'border-border/70 hover:border-primary/50'
-                        }`}
-                        data-selected={selected}
-                        key={preset.id}
-                        onClick={() => setPresetId(preset.id)}
-                        type="button"
-                        variant="outline"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`absolute inset-0 bg-gradient-to-br ${
-                            index % 3 === 0
-                              ? 'from-violet-500/35 via-card to-cyan-500/20'
-                              : index % 3 === 1
-                                ? 'from-amber-500/30 via-card to-rose-500/20'
-                                : 'from-emerald-500/30 via-card to-blue-500/20'
-                          }`}
-                        />
-                        {selected ? (
-                          <span className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-full bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
-                            <CheckCircle2
-                              aria-hidden="true"
-                              className="size-3"
-                            />
-                            Selected
-                          </span>
-                        ) : null}
-                        <span className="relative grid min-w-0 w-full gap-1 bg-gradient-to-t from-background/95 to-transparent p-4">
-                          <strong className="whitespace-normal font-heading text-base break-words">
-                            {preset.title}
-                          </strong>
-                          <span className="whitespace-normal text-xs leading-5 text-wrap break-words text-muted-foreground">
-                            {preset.description}
-                          </span>
-                        </span>
-                      </Button>
-                    )
-                  })}
-                </div>
-              </section>
-            ) : null}
+            {activeScenario === undefined ? (
+              <ChoiceCardGrid
+                choices={listStyleDefinitions(mediaType).map(
+                  (definition) => ({
+                    description: definition.description,
+                    id: definition.id,
+                    title: definition.label,
+                  }),
+                )}
+                description="Choose the visual treatment for this Generator."
+                label="Styles"
+                onChange={setStyle}
+                value={style}
+              />
+            ) : (
+              <ChoiceCardGrid
+                choices={activeScenario.presets}
+                description="Choose the visual treatment for this workflow."
+                label="Presets"
+                onChange={setPresetId}
+                value={
+                  presetId || activeScenario.presets[0]?.id || ''
+                }
+              />
+            )}
 
             {submission.state === 'success' ? (
               <Card
-                className="mt-5 border-emerald-500/25 bg-emerald-500/5"
+                className={
+                  submission.generation.status === 'succeeded'
+                    ? 'mt-5 border-emerald-500/25 bg-emerald-500/5'
+                    : 'mt-5 border-sky-500/25 bg-sky-500/5'
+                }
                 role="status"
               >
                 <CardHeader>
-                  <div className="flex items-center gap-2 text-emerald-500">
-                    <CheckCircle2
-                      aria-hidden="true"
-                      className="size-4"
-                    />
+                  <div
+                    className={
+                      submission.generation.status === 'succeeded'
+                        ? 'flex items-center gap-2 text-emerald-500'
+                        : 'flex items-center gap-2 text-sky-500'
+                    }
+                  >
+                    {submission.generation.status === 'succeeded' ? (
+                      <CheckCircle2
+                        aria-hidden="true"
+                        className="size-4"
+                      />
+                    ) : (
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="size-4 animate-spin"
+                      />
+                    )}
                     <span className="text-xs font-medium tracking-wider uppercase">
-                      Success
+                      {submission.generation.status === 'succeeded'
+                        ? 'Success'
+                        : 'In progress'}
                     </span>
                   </div>
                   <CardTitle>
-                    <h2>Generation created</h2>
+                    <h2>
+                      {submission.generation.status === 'succeeded'
+                        ? 'Generation created'
+                        : 'Generation in progress'}
+                    </h2>
                   </CardTitle>
                   <CardDescription>
                     {submission.generation.status === 'succeeded'
                       ? 'Your media is ready to review.'
-                      : 'The request is recorded and ready to track.'}
+                      : 'The workflow is running. Open the Generation to follow each step.'}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -749,14 +690,10 @@ export function CreatePage() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <p className="font-heading text-base font-medium">
-                {activeScenario === undefined
-                  ? 'Direction'
-                  : 'Production'}
+                Production
               </p>
               <p className="text-xs text-muted-foreground">
-                {activeScenario === undefined
-                  ? 'Refine the generation request.'
-                  : 'Configure this deliverable.'}
+                Configure this output.
               </p>
             </div>
             <Badge className="capitalize" variant="outline">
@@ -764,88 +701,24 @@ export function CreatePage() {
             </Badge>
           </div>
 
-          <Card size="sm">
-            <CardHeader>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <CardDescription>Model</CardDescription>
-                  <CardTitle>
-                    {activeDeployment?.model ?? 'Auto selection'}
-                  </CardTitle>
-                </div>
-                <Badge
-                  className="shrink-0"
-                  variant={
-                    settings === undefined ? 'outline' : 'secondary'
-                  }
-                >
-                  {settings === undefined
-                    ? 'Loading'
-                    : activeScenario !== undefined &&
-                        activeScenario.readiness.state !== 'ready'
-                      ? 'Needs setup'
-                      : 'Ready'}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <Label className="sr-only" htmlFor="deployment-id">
-                Model
-              </Label>
-              <NativeSelect
-                className="w-full"
-                id="deployment-id"
-                name="deploymentId"
-                onChange={(event) =>
-                  setDeploymentId(event.target.value)
-                }
-                value={deploymentId}
-              >
-                <NativeSelectOption value="">
-                  {autoDeployment === undefined
-                    ? 'Auto selection'
-                    : `Auto · ${autoDeployment.model}`}
-                </NativeSelectOption>
-                {eligibleDeployments.map(([id, deployment]) => (
-                  <NativeSelectOption key={id} value={id}>
-                    {deployment.model} · {id}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <p className="text-xs leading-5 text-muted-foreground">
-                Auto follows workspace routing. Manual fallback
-                selection requires approval.
-              </p>
-              {selectedRouteIndex > 0 ? (
-                <div className="flex items-center gap-2">
-                  <Checkbox id="force" name="force" />
-                  <Label htmlFor="force">Approve fallback</Label>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-
           {activeScenario === undefined ? (
             <>
-              <div className="mt-5 grid gap-2">
-                <Label htmlFor="style">Style</Label>
-                <NativeSelect
-                  className="w-full"
-                  id="style"
-                  name="style"
-                  onChange={(event) => setStyle(event.target.value)}
-                  value={style}
-                >
-                  {listStyleDefinitions(mediaType).map((definition) => (
-                    <NativeSelectOption
-                      key={definition.id}
-                      value={definition.id}
-                    >
-                      {definition.label}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </div>
+              <Card size="sm">
+                <CardContent>
+                  <ModelSelection
+                    autoLabel={
+                      autoDeployment === undefined
+                        ? 'Auto selection'
+                        : `Auto · ${autoDeployment.model}`
+                    }
+                    deployments={eligibleDeployments}
+                    label="Model"
+                    onChange={setDeploymentId}
+                    requiresApproval={selectedRouteIndex > 0}
+                    value={deploymentId}
+                  />
+                </CardContent>
+              </Card>
 
               <AspectRatioControl
                 aspectRatio={aspectRatio}
@@ -855,20 +728,14 @@ export function CreatePage() {
 
               {mediaType === 'video' ? (
                 <DurationControl
+                  allowedDurations={
+                    activeVideoProfile?.clipDurationsSeconds
+                  }
                   duration={duration}
                   label="Duration"
                   onChange={setDuration}
                 />
               ) : null}
-
-              <div className="mt-4">
-                <ReferencePicker
-                  onChange={setReferences}
-                  onTextReferencesChange={setTextReferences}
-                  textReferences={textReferences}
-                  value={references}
-                />
-              </div>
 
               <details className="mt-4 overflow-hidden rounded-xl border bg-card">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
@@ -936,7 +803,7 @@ export function CreatePage() {
                 </Alert>
               ) : null}
               {activeScenario.enabled &&
-              activeScenario.readiness.state !== 'ready' ? (
+              !activeScenarioReady ? (
                 <Alert className="mt-5" variant="destructive">
                   <AlertCircle aria-hidden="true" />
                   <AlertTitle>
@@ -945,7 +812,7 @@ export function CreatePage() {
                   <AlertDescription className="grid gap-3">
                     <span>
                       Missing setup:{' '}
-                      {activeScenario.readiness.missingRoles.join(', ')}
+                      {activeMissingRoles.join(', ')}
                     </span>
                     <Button
                       asChild
@@ -961,44 +828,22 @@ export function CreatePage() {
 
               {activeScenario.id === 'explainer-video' ? (
                 <>
-                  <Card className="mt-5" size="sm">
-                    <CardHeader>
-                      <CardDescription>
-                        Narration provider
-                      </CardDescription>
-                      <CardTitle>
-                        {configuredSpeech
-                          ? 'Azure Speech configured'
-                          : 'Azure Speech not configured'}
-                      </CardTitle>
-                      <CardDescription className="break-all">
-                        {configuredSpeech
-                          ? `${configuredSpeech.defaultVoice} · ${configuredSpeech.endpoint}`
-                          : 'Open Settings to add a private Speech resource endpoint and API key.'}
-                      </CardDescription>
-                    </CardHeader>
-                  </Card>
                   <div className="mt-5 grid gap-2">
-                    <Label htmlFor="scenario-voice">
-                      Voice (optional)
-                    </Label>
+                    <Label htmlFor="scenario-voice">Voice</Label>
                     <NativeSelect
                       className="w-full"
                       id="scenario-voice"
                       onChange={(event) => {
                         const nextVoice = event.target.value
                         setVoice(nextVoice)
-                        if (nextVoice === 'none') {
-                          setNarration('')
-                        }
                       }}
                       value={voice}
                     >
-                      <NativeSelectOption value="none">
-                        No voice
+                      <NativeSelectOption value="off">
+                        Off
                       </NativeSelectOption>
                       {configuredSpeech !== undefined &&
-                      !maiVoiceOptions.some(
+                      !voiceOptions.some(
                         (option) =>
                           option.id === configuredSpeech.defaultVoice,
                       ) ? (
@@ -1009,7 +854,7 @@ export function CreatePage() {
                           default
                         </NativeSelectOption>
                       ) : null}
-                      {maiVoiceOptions.map((option) => (
+                      {voiceOptions.map((option) => (
                         <NativeSelectOption
                           disabled={configuredSpeech === undefined}
                           key={option.id}
@@ -1026,119 +871,157 @@ export function CreatePage() {
                       </p>
                     ) : null}
                   </div>
-                  {voice === 'none' ? null : (
-                    <div className="mt-4 grid gap-2">
-                      <Label htmlFor="scenario-narration">
-                        Narration script
-                      </Label>
-                      <Textarea
-                        className="min-h-28 resize-y"
-                        id="scenario-narration"
-                        onChange={(event) =>
-                          setNarration(event.target.value)
-                        }
-                        placeholder="Optional. Defaults to the Creative Brief."
-                        value={narration}
-                      />
-                    </div>
-                  )}
                   <SubtitlesControl
                     checked={subtitles}
                     onChange={setSubtitles}
                   />
-                  <AspectRatioControl
-                    aspectRatio={aspectRatio}
-                    mediaType="video"
-                    onChange={setAspectRatio}
-                  />
-                  <DurationControl
-                    duration={duration}
-                    label="Duration"
-                    onChange={setDuration}
-                  />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <AspectRatioControl
+                      aspectRatio={aspectRatio}
+                      mediaType="video"
+                      onChange={setAspectRatio}
+                    />
+                    <ExplainerDurationControl
+                      choice={explainerDurationChoice}
+                      duration={duration}
+                      onChange={(nextDuration) => {
+                        setDuration(nextDuration)
+                      }}
+                      onChoiceChange={setExplainerDurationChoice}
+                      profile={activeVideoProfile}
+                    />
+                  </div>
                 </>
               ) : (
                 <>
-                  <div className="mt-5 grid gap-2">
-                    <Label htmlFor="scenario-orientation">
-                      Orientation
-                    </Label>
-                    <NativeSelect
-                      className="w-full"
-                      id="scenario-orientation"
-                      onChange={(event) =>
-                        setOrientation(
-                          event.target.value === 'horizontal'
-                            ? 'horizontal'
-                            : 'vertical',
-                        )
-                      }
-                      value={orientation}
-                    >
-                      <NativeSelectOption value="vertical">
-                        Vertical
-                      </NativeSelectOption>
-                      <NativeSelectOption value="horizontal">
-                        Horizontal
-                      </NativeSelectOption>
-                    </NativeSelect>
-                  </div>
-                  <div className="mt-4 grid gap-2">
-                    <Label htmlFor="scenario-language">Language</Label>
-                    <NativeSelect
-                      className="w-full"
-                      id="scenario-language"
-                      onChange={(event) => setLanguage(event.target.value)}
-                      value={language}
-                    >
-                      <NativeSelectOption value="auto">
-                        Auto detect
-                      </NativeSelectOption>
-                      <NativeSelectOption value="en">English</NativeSelectOption>
-                      <NativeSelectOption value="es">Spanish</NativeSelectOption>
-                      <NativeSelectOption value="fr">French</NativeSelectOption>
-                    </NativeSelect>
+                  <div
+                    aria-label="Layout"
+                    className="mt-5 grid gap-4 sm:grid-cols-2"
+                    role="group"
+                  >
+                    <div className="grid gap-2">
+                      <Label htmlFor="scenario-orientation">
+                        Orientation
+                      </Label>
+                      <NativeSelect
+                        className="w-full"
+                        id="scenario-orientation"
+                        onChange={(event) =>
+                          setOrientation(
+                            event.target.value === 'horizontal'
+                              ? 'horizontal'
+                              : 'vertical',
+                          )
+                        }
+                        value={orientation}
+                      >
+                        <NativeSelectOption value="vertical">
+                          Vertical
+                        </NativeSelectOption>
+                        <NativeSelectOption value="horizontal">
+                          Horizontal
+                        </NativeSelectOption>
+                      </NativeSelect>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="scenario-language">Language</Label>
+                      <NativeSelect
+                        className="w-full"
+                        id="scenario-language"
+                        onChange={(event) =>
+                          setLanguage(event.target.value)
+                        }
+                        value={language}
+                      >
+                        <NativeSelectOption value="auto">
+                          Auto detect
+                        </NativeSelectOption>
+                        <NativeSelectOption value="en">
+                          English
+                        </NativeSelectOption>
+                        <NativeSelectOption value="es">
+                          Spanish
+                        </NativeSelectOption>
+                        <NativeSelectOption value="fr">
+                          French
+                        </NativeSelectOption>
+                      </NativeSelect>
+                    </div>
                   </div>
                   <SubtitlesControl
                     checked={subtitles}
                     onChange={setSubtitles}
                   />
-                  <div className="mt-4 grid gap-2">
-                    <Label htmlFor="scenario-clip-count">
-                      Clip count
-                    </Label>
-                    <NativeSelect
-                      className="w-full"
-                      id="scenario-clip-count"
-                      onChange={(event) =>
-                        setClipCount(Number(event.target.value))
+                  <div
+                    aria-label="Clips"
+                    className="mt-4 grid gap-4 sm:grid-cols-2 [&>div]:mt-0"
+                    role="group"
+                  >
+                    <div className="grid gap-2">
+                      <Label htmlFor="scenario-clip-count">
+                        Clip count
+                      </Label>
+                      <NativeSelect
+                        className="w-full"
+                        id="scenario-clip-count"
+                        onChange={(event) =>
+                          setClipCount(Number(event.target.value))
+                        }
+                        value={String(clipCount)}
+                      >
+                        {[1, 2, 3, 4].map((count) => (
+                          <NativeSelectOption
+                            key={count}
+                            value={String(count)}
+                          >
+                            {count}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    </div>
+                    <DurationControl
+                      allowedDurations={
+                        activeVideoProfile?.clipDurationsSeconds
                       }
-                      value={String(clipCount)}
-                    >
-                      {[1, 2, 3, 4].map((count) => (
-                        <NativeSelectOption
-                          key={count}
-                          value={String(count)}
-                        >
-                          {count}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
+                      duration={clipDuration}
+                      label="Clip duration"
+                      onChange={setClipDuration}
+                    />
                   </div>
-                  <DurationControl
-                    duration={clipDuration}
-                    label="Clip duration"
-                    onChange={setClipDuration}
-                  />
                 </>
               )}
+
+              <details className="mt-5 overflow-hidden rounded-xl border bg-card">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
+                  <span className="flex items-center gap-2">
+                    <SlidersHorizontal
+                      aria-hidden="true"
+                      className="size-4 text-muted-foreground"
+                    />
+                    Advanced
+                  </span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Video model
+                  </span>
+                </summary>
+                <div className="grid gap-3 border-t p-4">
+                  <ModelSelection
+                    autoLabel="Auto"
+                    deployments={eligibleDeployments}
+                    label="Video model"
+                    onChange={setDeploymentId}
+                    requiresApproval={selectedRouteIndex > 0}
+                    value={deploymentId}
+                  />
+                </div>
+              </details>
 
               <Button
                 className="mt-5 w-full"
                 disabled={
                   submission.state === 'submitting' ||
                   !activeScenario.enabled ||
-                  activeScenario.readiness.state !== 'ready' ||
+                  !activeScenarioReady ||
                   (activeScenario.id === 'short-form-video' &&
                     references.length !== 1)
                 }
@@ -1243,15 +1126,37 @@ function AspectRatioControl({
 }
 
 function DurationControl({
+  allowedDurations,
   duration,
   label,
   onChange,
 }: {
+  allowedDurations?: number[]
   duration: number
   label: string
   onChange: (value: number) => void
 }) {
   const id = label === 'Duration' ? 'duration' : 'clip-duration'
+  if (allowedDurations !== undefined) {
+    return (
+      <div className="mt-4 grid gap-2">
+        <Label htmlFor={id}>{label}</Label>
+        <NativeSelect
+          className="w-full"
+          id={id}
+          name={id}
+          onChange={(event) => onChange(Number(event.target.value))}
+          value={String(duration)}
+        >
+          {allowedDurations.map((seconds) => (
+            <NativeSelectOption key={seconds} value={String(seconds)}>
+              {durationLabel(seconds)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+    )
+  }
   return (
     <div className="mt-4 grid gap-2">
       <div className="flex items-center justify-between gap-3">
@@ -1280,6 +1185,123 @@ function DurationControl({
       </div>
     </div>
   )
+}
+
+function ExplainerDurationControl({
+  choice,
+  duration,
+  onChange,
+  onChoiceChange,
+  profile,
+}: {
+  choice: string
+  duration: number
+  onChange: (value: number) => void
+  onChoiceChange: (value: string) => void
+  profile:
+    | SettingsGetResult['catalog']['videoModels'][number]
+    | undefined
+}) {
+  if (profile === undefined) {
+    return (
+      <p className="mt-4 text-xs leading-5 text-muted-foreground">
+        Select a configured video model to show duration options.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mt-4 grid gap-2">
+      <Label htmlFor="explainer-duration">Duration</Label>
+      <NativeSelect
+        className="w-full"
+        id="explainer-duration"
+        onChange={(event) => {
+          const nextChoice = event.target.value
+          onChoiceChange(nextChoice)
+          if (nextChoice === 'manual') {
+            onChange(
+              nearestComposableDuration(profile, duration),
+            )
+            return
+          }
+          onChange(Number(nextChoice))
+        }}
+        value={choice}
+      >
+        {profile.explainerDurationPresetsSeconds.map((seconds) => (
+          <NativeSelectOption key={seconds} value={String(seconds)}>
+            {durationLabel(seconds)}
+          </NativeSelectOption>
+        ))}
+        <NativeSelectOption value="manual">Manual</NativeSelectOption>
+      </NativeSelect>
+      {choice === 'manual' ? (
+        <div className="mt-2 grid gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="manual-duration">Manual duration</Label>
+            <span className="text-sm font-medium">
+              Effective: {durationLabel(duration)}
+            </span>
+          </div>
+          <Slider
+            aria-label="Manual duration"
+            className="py-2 [&_[data-slot=slider-thumb]]:size-4 [&_[data-slot=slider-track]]:h-2"
+            id="manual-duration"
+            max={profile.manualDuration.maxSeconds}
+            min={profile.manualDuration.minSeconds}
+            onValueChange={(values) => {
+              const requested = values[0]
+              if (requested !== undefined) {
+                onChange(
+                  nearestComposableDuration(profile, requested),
+                )
+              }
+            }}
+            step={1}
+            value={[duration]}
+          />
+          <div className="flex justify-between text-[11px] text-muted-foreground">
+            <span>
+              {durationLabel(profile.manualDuration.minSeconds)}
+            </span>
+            <span>
+              {durationLabel(profile.manualDuration.maxSeconds)}
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function nearestComposableDuration(
+  profile: SettingsGetResult['catalog']['videoModels'][number],
+  requestedSeconds: number,
+): number {
+  return [...profile.composableDurationsSeconds].sort((left, right) => {
+    const distance =
+      Math.abs(left - requestedSeconds) -
+      Math.abs(right - requestedSeconds)
+    if (distance !== 0) {
+      return distance
+    }
+    if (left >= requestedSeconds && right < requestedSeconds) {
+      return -1
+    }
+    if (right >= requestedSeconds && left < requestedSeconds) {
+      return 1
+    }
+    return left - right
+  })[0] ?? requestedSeconds
+}
+
+function durationLabel(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds} seconds`
+  }
+  const minutes = seconds / 60
+  return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`
 }
 
 function SubtitlesControl({

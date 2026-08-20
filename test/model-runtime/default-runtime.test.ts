@@ -1,6 +1,9 @@
 import {describe, expect, test} from 'vitest'
 
-import {createDefaultModelRuntime} from '../../src/model-runtime/default-runtime.js'
+import {
+  createDefaultModelRuntime,
+  createDefaultStructuredModelRuntime,
+} from '../../src/model-runtime/default-runtime.js'
 
 describe('createDefaultModelRuntime', () => {
   test('includes the MAI image adapter', async () => {
@@ -46,5 +49,45 @@ describe('createDefaultModelRuntime', () => {
         },
       ],
     })
+  })
+
+  test('includes the structured Azure OpenAI planning adapter', async () => {
+    const runtime = createDefaultStructuredModelRuntime({
+      credential: {
+        getToken: async () => ({
+          expiresOnTimestamp: Date.now() + 60_000,
+          token: 'token',
+        }),
+      },
+      fetch: async () =>
+        Response.json({
+          choices: [
+            {
+              message: {
+                content: '{"title":"Plan"}',
+                role: 'assistant',
+              },
+            },
+          ],
+        }),
+    })
+
+    await expect(
+      runtime.generate({
+        adapter: 'azure-openai-chat',
+        deploymentName: 'planner',
+        jsonSchema: {
+          properties: {title: {type: 'string'}},
+          required: ['title'],
+          type: 'object',
+        },
+        modelName: 'gpt-4.1-mini',
+        projectEndpoint:
+          'https://example.services.ai.azure.com/api/projects/media',
+        prompt: 'Plan an explainer.',
+        schemaName: 'plan',
+        systemPrompt: 'Return JSON.',
+      }),
+    ).resolves.toEqual({value: {title: 'Plan'}})
   })
 })

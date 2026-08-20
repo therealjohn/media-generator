@@ -173,14 +173,13 @@ describe('SoraVideoAdapter', () => {
     },
   ])(
     'submits one $referenceType reference as multipart form data',
-    async ({fileName, mediaType, referenceType}) => {
+    async ({fileName, mediaType}) => {
       const observedCalls: ObservedFetchCall[] = []
       const observedPaths: string[] = []
       const responses = [
         jsonResponse({
-          generations: [{id: 'generation-1'}],
-          id: 'job-1',
-          status: 'succeeded',
+          id: 'video-1',
+          status: 'completed',
         }),
         new Response(Buffer.from('mp4 bytes')),
       ]
@@ -230,31 +229,20 @@ describe('SoraVideoAdapter', () => {
       expect(
         new Headers(observedCalls[0]?.init.headers).get('content-type'),
       ).toBeNull()
+      expect(observedCalls.map((call) => call.url)).toEqual([
+        'https://example.openai.azure.com/openai/v1/videos',
+        'https://example.openai.azure.com/openai/v1/videos/video-1/content',
+      ])
       const body = observedCalls[0]?.init.body
       expect(body).toBeInstanceOf(FormData)
       const form = body as FormData
       expect(Object.fromEntries(form.entries())).toMatchObject({
-        height: '720',
-        inpaint_items: JSON.stringify([
-          {
-            crop_bounds: {
-              bottom_fraction: 1,
-              left_fraction: 0,
-              right_fraction: 1,
-              top_fraction: 0,
-            },
-            file_name: fileName,
-            frame_index: 0,
-            type: referenceType,
-          },
-        ]),
         model: 'sora-deployment',
-        n_seconds: '8',
-        n_variants: '1',
         prompt: 'A paper airplane gliding over a city',
-        width: '1280',
+        seconds: '8',
+        size: '1280x720',
       })
-      const file = form.get('files')
+      const file = form.get('input_reference')
       expect(file).toBeInstanceOf(Blob)
       expect((file as File).name).toBe(fileName)
       expect((file as Blob).type).toBe(mediaType)
@@ -425,6 +413,37 @@ describe('SoraVideoAdapter', () => {
       ),
     ).rejects.toThrow(
       'Sora video generation accepts at most one reference',
+    )
+    expect(tokenCalls).toBe(0)
+    expect(fetchCalls).toBe(0)
+  })
+
+  test('rejects unsupported clip durations before authentication or submission', async () => {
+    let fetchCalls = 0
+    let tokenCalls = 0
+    const adapter = createSoraVideoAdapter({
+      fetch: async () => {
+        fetchCalls += 1
+        throw new Error('Unexpected fetch')
+      },
+      getAccessToken: async () => {
+        tokenCalls += 1
+        return 'test-token'
+      },
+    })
+
+    await expect(
+      adapter.generate(
+        request({
+          controls: {
+            height: 720,
+            nSeconds: 18,
+            width: 1280,
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      'Sora duration 18 is unsupported; expected one of 4, 8, 12, 16, 20 seconds',
     )
     expect(tokenCalls).toBe(0)
     expect(fetchCalls).toBe(0)

@@ -121,11 +121,13 @@ GET  /openai/v1/videos/{videoId}/content
 ```
 
 The native Sora 2 v1 request uses `model`, `prompt`, `size`, and `seconds`.
+Image and video guidance is uploaded as multipart `input_reference`.
 The CLI creates a job, polls until it reaches a terminal state, then downloads
 the MP4 output. Media Gen uses this native surface for single-variant
-text-to-video requests. It retains the preview jobs surface for the existing
-reference and multi-variant contracts, and falls back to that surface only
-when native job submission returns HTTP 404.
+single-variant text and reference-guided requests. It retains the preview jobs
+surface for multi-variant compatibility and as a fallback when native job
+submission returns HTTP 404. Reference images are normalized locally to the
+requested Sora width and height before upload.
 
 Sora 2 supports text-to-video, image-to-video, and generated-video remix
 workflows.
@@ -142,17 +144,17 @@ Models:
 
 - `MAI-Voice-2`
 
-MAI Voice synthesis uses an Azure Speech resource endpoint:
+MAI Voice synthesis uses the regional Azure Speech endpoint:
 
 ```text
-POST {speech-endpoint}/cognitiveservices/v1
+POST https://<region>.tts.speech.microsoft.com/cognitiveservices/v1
 ```
 
 The request body is SSML. Authentication uses the resource API key in the
 `Ocp-Apim-Subscription-Key` header. The response is binary audio; Media Gen
 requests `audio-24khz-160kbitrate-mono-mp3`.
 
-The resource endpoint, API key, and default Voice are stored in the private
+The regional synthesis endpoint, API key, and default Voice are stored in the private
 Local Profile. Foundry deployment discovery does not discover or persist this
 connection. Voice IDs select the MAI persona, for example
 `en-US-Harper:MAI-Voice-2`.

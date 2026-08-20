@@ -28,6 +28,9 @@ import {
 import {createChildProcessRunner} from '../auth/child-process-runner.js'
 import {
   findModelDefinition,
+  listComposableExplainerDurations,
+  listModelDefinitions,
+  listVoiceDefinitions,
   type MediaType,
   type ModelAdapterKind,
   type ModelMediaType,
@@ -48,6 +51,7 @@ import {
   createGenerationStore,
   type GenerationRecord,
 } from '../generation/generation-store.js'
+import {inspectReference} from '../generation/references.js'
 import type {TextReferenceInput} from '../generation/text-reference.js'
 import {
   createCreationModule,
@@ -57,7 +61,19 @@ import {
 import {
   type ModelRuntime,
 } from '../model-runtime/model-runtime.js'
-import {createDefaultModelRuntime} from '../model-runtime/default-runtime.js'
+import {
+  createDefaultModelRuntime,
+  createDefaultStructuredModelRuntime,
+} from '../model-runtime/default-runtime.js'
+import type {StructuredModelRuntime} from '../model-runtime/structured-model-runtime.js'
+import {
+  createFfmpegMediaComposer,
+  type MediaComposer,
+} from '../media/media-composer.js'
+import {
+  createFfmpegImageNormalizer,
+  type ImageNormalizer,
+} from '../media/image-normalizer.js'
 import {MediaGenError} from './media-gen-error.js'
 import {
   parseRegistry,
@@ -70,6 +86,7 @@ import {
 import {withFileLock} from '../workspace/file-lock.js'
 import {
   isAzureSpeechEndpoint,
+  isAzureSpeechSynthesisEndpoint,
   isMicrosoftFoundryProjectEndpoint,
 } from '../workspace/endpoints.js'
 
@@ -84,8 +101,19 @@ function scenarioView(
   localProfile: LocalProfile,
   scenario: ReturnType<typeof listScenarioDefinitions>[number],
 ): ScenarioView {
+  const {
+    defaultRoutingRoles: _defaultRoutingRoles,
+    presets,
+    roleMediaTypes: _roleMediaTypes,
+    ...publicScenario
+  } = scenario
   return {
-    ...scenario,
+    ...publicScenario,
+    presets: presets.map(({description, id, title}) => ({
+      description,
+      id,
+      title,
+    })),
     enabled: manifest.scenarios.enabled.includes(scenario.id),
     readiness: scenarioReadiness(manifest, localProfile, scenario),
   }
@@ -116,6 +144,7 @@ export type MediaGenCommand =
   | {type: 'home'}
   | {type: 'init'}
   | {
+      background?: boolean
       force: boolean
       request: CreateRequest
       type: 'create'
@@ -136,6 +165,11 @@ export type MediaGenCommand =
   | {force: boolean; type: 'generations-cleanup'}
   | {id: string; type: 'generations-get'}
   | {
+      background?: boolean
+      id: string
+      type: 'generations-resume'
+    }
+  | {
       creativeBrief: string
       id: string
       style?: string
@@ -150,6 +184,7 @@ export type MediaGenCommand =
     }
   | {from: string; type: 'relink'}
   | {
+      background?: boolean
       creativeBrief?: string
       deploymentOverrides?: Record<string, string>
       force?: boolean
@@ -277,8 +312,16 @@ export interface ScenariosListResult {
 }
 
 export type ScenarioView =
-  ReturnType<typeof listScenarioDefinitions>[number] & {
+  Omit<
+    ReturnType<typeof listScenarioDefinitions>[number],
+    'defaultRoutingRoles' | 'presets' | 'roleMediaTypes'
+  > & {
     enabled: boolean
+    presets: Array<{
+      description: string
+      id: string
+      title: string
+    }>
     readiness: {
       missingRoles: string[]
       state: 'not-ready' | 'ready'
@@ -304,6 +347,11 @@ export interface GenerationsListResult {
 
 export interface GenerationsGetResult {
   generation: GenerationRecord
+  referenceStates: Array<
+    | {path: string; state: 'missing'}
+    | {path: string; state: 'present'}
+    | {currentSha256: string; path: string; state: 'changed'}
+  >
   type: 'generations-get'
 }
 
@@ -335,6 +383,11 @@ export interface GenerationsRecreateResult {
   type: 'generations-recreate'
 }
 
+export interface GenerationsResumeResult {
+  generation: GenerationRecord
+  type: 'generations-resume'
+}
+
 export interface GenerationsReferenceResult {
   references: Array<{
     generationId: string
@@ -346,6 +399,25 @@ export interface GenerationsReferenceResult {
 
 export interface SettingsGetResult {
   auth: AuthStatus
+  catalog: {
+    videoModels: Array<{
+      clipDurationsSeconds: number[]
+      composableDurationsSeconds: number[]
+      explainerDurationPresetsSeconds: number[]
+      manualDuration: {
+        maxSeconds: number
+        minSeconds: number
+      }
+      maxConcurrentRequests: number
+      model: string
+      preferredClipSeconds: number
+    }>
+    voices: Array<{
+      id: string
+      label: string
+      model: 'MAI-Voice-2'
+    }>
+  }
   manifest: WorkspaceManifest
   scenarios: ScenarioView[]
   speech:
@@ -387,6 +459,7 @@ export type MediaGenResult =
   | GenerationsGetResult
   | GenerationsListResult
   | GenerationsRecreateResult
+  | GenerationsResumeResult
   | GenerationsReferenceResult
   | HomeResult
   | InitResult
@@ -408,8 +481,12 @@ export interface ApplicationDependencies {
   createGenerationId: () => string
   createWorkspaceId: () => string
   foundryDiscovery: FoundryDiscovery
+  imageNormalizer: ImageNormalizer
+  mediaComposer: MediaComposer
   modelRuntime: ModelRuntime
   now: () => Date
+  reportBackgroundError(error: unknown): void
+  structuredModelRuntime: StructuredModelRuntime
 }
 
 const defaultDependencies: ApplicationDependencies = {
@@ -417,8 +494,16 @@ const defaultDependencies: ApplicationDependencies = {
   createGenerationId: () => ulid(),
   createWorkspaceId: () => randomUUID(),
   foundryDiscovery: createAzureFoundryDiscovery(),
+  imageNormalizer: createFfmpegImageNormalizer(),
+  mediaComposer: createFfmpegMediaComposer(),
   modelRuntime: createDefaultModelRuntime(),
   now: () => new Date(),
+  reportBackgroundError: (error) => {
+    console.error(
+      `Background Generation failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  },
+  structuredModelRuntime: createDefaultStructuredModelRuntime(),
 }
 
 const description =
@@ -501,6 +586,8 @@ export function createMediaGenApplication(
           return recreateGeneration(context, command, dependencies)
         case 'generations-reference':
           return referenceGenerations(context, command, dependencies)
+        case 'generations-resume':
+          return resumeGeneration(context, command, dependencies)
         case 'init':
           return initializeWorkspace(context, dependencies)
         case 'relink':
@@ -670,6 +757,24 @@ export function createMediaGenApplication(
         )
         return {
           auth: await authModule.status(),
+          catalog: {
+            videoModels: listModelDefinitions().flatMap(
+              (definition) =>
+                definition.video === undefined
+                  ? []
+                  : [
+                      {
+                        ...definition.video,
+                        composableDurationsSeconds:
+                          listComposableExplainerDurations(
+                            definition.modelName,
+                          ),
+                        model: definition.modelName,
+                      },
+                    ],
+            ),
+            voices: [...listVoiceDefinitions()],
+          },
           manifest,
           scenarios: listScenarioDefinitions().map((scenario) =>
             scenarioView(manifest, localProfile, scenario),
@@ -762,27 +867,31 @@ async function configureFoundry(
           videoDeployments.map((deployment) => deployment.id),
         ),
       }
-      for (const scenario of listScenarioDefinitions()) {
-        const scenarioRoutes =
-          manifest.routing.scenarios[scenario.id] ?? {}
-        for (const role of scenario.routingRoles) {
-          const eligibleDeployments = deployments.filter(
-            (deployment) =>
-              deployment.mediaType ===
-              scenario.roleMediaTypes[role],
-          )
-          if (eligibleDeployments.length === 0) {
-            continue
-          }
-          scenarioRoutes[role] = {
-            auto: appendUnique(
-              scenarioRoutes[role]?.auto ?? [],
-              eligibleDeployments.map(
-                (deployment) => deployment.id,
-              ),
-            ),
-          }
+    }
+    for (const scenario of listScenarioDefinitions()) {
+      const scenarioRoutes =
+        manifest.routing.scenarios[scenario.id] ?? {}
+      let updated = false
+      for (const role of scenario.routingRoles) {
+        const eligibleDeployments = deployments.filter(
+          (deployment) =>
+            deployment.mediaType ===
+            scenario.roleMediaTypes[role],
+        )
+        if (eligibleDeployments.length === 0) {
+          continue
         }
+        scenarioRoutes[role] = {
+          auto: appendUnique(
+            scenarioRoutes[role]?.auto ?? [],
+            eligibleDeployments.map(
+              (deployment) => deployment.id,
+            ),
+          ),
+        }
+        updated = true
+      }
+      if (updated) {
         manifest.routing.scenarios[scenario.id] = scenarioRoutes
       }
     }
@@ -816,15 +925,8 @@ async function configureSpeech(
     'local.json',
   )
   const normalizedEndpoint = normalizeSpeechEndpoint(endpoint)
-  const normalizedApiKey = apiKey.trim()
+  const requestedApiKey = apiKey.trim()
   const normalizedVoice = voice.trim()
-  if (normalizedApiKey.length === 0) {
-    throw new MediaGenError(
-      'missing_argument',
-      'Azure Speech configuration requires an API key',
-      2,
-    )
-  }
   if (normalizedVoice.length === 0) {
     throw new MediaGenError(
       'missing_argument',
@@ -836,6 +938,15 @@ async function configureSpeech(
     const localProfile = await readLocalProfile(
       resolvedWorkspace.mediaWorkspacePath,
     )
+    const normalizedApiKey =
+      requestedApiKey || localProfile.speech?.apiKey
+    if (normalizedApiKey === undefined) {
+      throw new MediaGenError(
+        'missing_argument',
+        'Azure Speech configuration requires an API key',
+        2,
+      )
+    }
     localProfile.speech = {
       apiKey: normalizedApiKey,
       defaultVoice: normalizedVoice,
@@ -978,6 +1089,7 @@ async function editGeneration(
   const result = await generateMedia(
     context,
     {
+      controls: source.controls,
       creativeBrief: command.creativeBrief,
       mediaType: source.mediaType,
       referencePaths: [
@@ -1021,7 +1133,7 @@ async function generateMedia(
               }
             : {
                 height: 720,
-                nSeconds: 5,
+                nSeconds: 8,
                 nVariants: 1,
                 width: 1280,
                 ...command.controls,
@@ -1083,15 +1195,37 @@ async function createMedia(
     command.force,
   )
   const creation = createCreationModule({
+    imageNormalizer: dependencies.imageNormalizer,
+    mediaComposer: dependencies.mediaComposer,
     modelRuntime: dependencies.modelRuntime,
     store: createGenerationStore(mediaWorkspacePath, {
       createId: dependencies.createGenerationId,
       now: dependencies.now,
     }),
+    structuredModelRuntime: dependencies.structuredModelRuntime,
     workspacePath: mediaWorkspacePath,
   })
 
   try {
+    if (
+      command.background === true &&
+      request.kind === 'scenario' &&
+      request.scenario === 'explainer-video'
+    ) {
+      const run = await creation.start({
+        deployments: resolved.deployments,
+        force: command.force,
+        request,
+        sourceGenerations,
+      })
+      void run.completion.catch((error: unknown) => {
+        dependencies.reportBackgroundError(error)
+      })
+      return {
+        generation: run.generation,
+        type: 'create',
+      }
+    }
     return {
       generation: await creation.create({
         deployments: resolved.deployments,
@@ -1147,9 +1281,11 @@ function resolveCreationDeployments(
               .roleMediaTypes[role]!,
             override: request.deploymentOverrides[role],
             role,
-            route:
-              manifest.routing.scenarios[request.scenario]?.[role]
-                ?.auto ?? [],
+            route: scenarioRoleRoute(
+              manifest,
+              request.scenario,
+              role,
+            ),
           }),
         )
   const deployments: Record<string, ResolvedCreationDeployment> = {}
@@ -1178,6 +1314,7 @@ function resolveCreationDeployments(
       deployments[role.role] = {
         adapter: 'mai-voice',
         apiKey: speech.apiKey,
+        defaultVoice: speech.defaultVoice,
         deploymentName: 'azure-speech',
         endpoint: speech.endpoint,
         id: 'local:speech',
@@ -1248,6 +1385,33 @@ function resolveCreationDeployments(
   return {deployments, fallback, primaryDeploymentId}
 }
 
+function scenarioRoleRoute(
+  manifest: WorkspaceManifest,
+  scenarioId: string,
+  role: string,
+): string[] {
+  const explicit =
+    manifest.routing.scenarios[scenarioId]?.[role]?.auto
+  if (explicit !== undefined && explicit.length > 0) {
+    return explicit
+  }
+  if (scenarioId !== 'explainer-video') {
+    return []
+  }
+  if (role === 'reference-image') {
+    return manifest.routing.generators.image?.auto ?? []
+  }
+  if (role === 'planning') {
+    return Object.entries(manifest.deployments).flatMap(
+      ([id, deployment]) =>
+        findModelDefinition(deployment.model)?.mediaType === 'text'
+          ? [id]
+          : [],
+    )
+  }
+  return []
+}
+
 async function recreateGeneration(
   context: CommandContext,
   command: Extract<
@@ -1270,13 +1434,17 @@ async function recreateGeneration(
         `Generation "${source.id}" is missing Scenario inputs`,
       )
     }
+    const mergedOptions = {
+      ...source.scenario.options,
+      ...command.options,
+    }
     const request = parseScenarioRequest(source.selection.scenario, {
       creativeBrief: command.creativeBrief ?? source.creativeBrief,
       deploymentOverrides: command.deploymentOverrides ?? {},
-      options: {
-        ...source.scenario.options,
-        ...command.options,
-      },
+      options:
+        source.selection.scenario === 'explainer-video'
+          ? normalizeExplainerOptionsForReuse(mergedOptions)
+          : mergedOptions,
       preset: command.preset ?? source.selection.preset,
       sourcePaths: source.references.map((reference) => reference.path),
       textReferences,
@@ -1287,6 +1455,7 @@ async function recreateGeneration(
     const result = await createMedia(
       context,
       {
+        background: command.background,
         force: command.force === true,
         request,
         type: 'create',
@@ -1302,6 +1471,7 @@ async function recreateGeneration(
   const result = await generateMedia(
     context,
     {
+      controls: source.controls,
       creativeBrief: command.creativeBrief ?? source.creativeBrief,
       mediaType: source.mediaType,
       referencePaths: [],
@@ -1342,6 +1512,122 @@ async function recreateGeneration(
     )
   }
 
+}
+
+async function resumeGeneration(
+  context: CommandContext,
+  command: Extract<
+    MediaGenCommand,
+    {type: 'generations-resume'}
+  >,
+  dependencies: ApplicationDependencies,
+): Promise<GenerationsResumeResult> {
+  const resolvedWorkspace = await resolveWorkspace(context)
+  const store = createGenerationStore(
+    resolvedWorkspace.mediaWorkspacePath,
+    {
+      createId: dependencies.createGenerationId,
+      now: dependencies.now,
+    },
+  )
+  const source = await store.get(command.id)
+  if (
+    source.selection.kind !== 'scenario' ||
+    source.selection.scenario !== 'explainer-video'
+  ) {
+    throw new MediaGenError(
+      'workflow_resume_unsupported',
+      `Generation "${source.id}" is not a resumable Explainer workflow`,
+      2,
+    )
+  }
+  if (source.scenario === null) {
+    throw new MediaGenError(
+      'invalid_generation_record',
+      `Generation "${source.id}" is missing Scenario inputs`,
+    )
+  }
+  const manifest = await readManifest(
+    resolvedWorkspace.manifestPath,
+  )
+  const localProfile = await readLocalProfile(
+    resolvedWorkspace.mediaWorkspacePath,
+  )
+  const deploymentOverrides = Object.fromEntries(
+    source.resolvedResources.flatMap((resource) =>
+      resource.role === 'voice'
+        ? []
+        : [[resource.role, resource.id]],
+    ),
+  )
+  const request = parseScenarioRequest('explainer-video', {
+    creativeBrief: source.creativeBrief,
+    deploymentOverrides,
+    options: normalizeExplainerOptionsForReuse(
+      source.scenario.options,
+    ),
+    preset: source.selection.preset,
+    sourcePaths: source.references.map((reference) => reference.path),
+    webReferenceUrls: source.webReferences.map(
+      (reference) => reference.url,
+    ),
+  })
+  const resolved = resolveCreationDeployments(
+    manifest,
+    localProfile,
+    request,
+    true,
+  )
+  const creation = createCreationModule({
+    imageNormalizer: dependencies.imageNormalizer,
+    mediaComposer: dependencies.mediaComposer,
+    modelRuntime: dependencies.modelRuntime,
+    store,
+    structuredModelRuntime: dependencies.structuredModelRuntime,
+    workspacePath: resolvedWorkspace.mediaWorkspacePath,
+  })
+  const resumeInput = {
+    deployments: resolved.deployments,
+    generationId: source.id,
+    scenario: 'explainer-video' as const,
+  }
+  if (command.background === true) {
+    const run = await creation.startResume(resumeInput)
+    void run.completion.catch((error: unknown) => {
+      dependencies.reportBackgroundError(error)
+    })
+    return {
+      generation: run.generation,
+      type: 'generations-resume',
+    }
+  }
+  return {
+    generation: await creation.resume(resumeInput),
+    type: 'generations-resume',
+  }
+}
+
+function normalizeExplainerOptionsForReuse(
+  options: Record<string, unknown>,
+): Record<string, unknown> {
+  const voice = options.voice
+  if (typeof voice === 'string' && voice.trim().length > 0) {
+    return {
+      ...options,
+      voice: {id: voice, mode: 'selected'},
+    }
+  }
+  if (
+    typeof voice === 'object' &&
+    voice !== null &&
+    'mode' in voice
+  ) {
+    return options
+  }
+  return {
+    ...options,
+    voice: {mode: 'off'},
+  }
 }
 
 async function referenceGenerations(
@@ -1386,10 +1672,99 @@ async function getGeneration(
   id: string,
   dependencies: ApplicationDependencies,
 ): Promise<GenerationsGetResult> {
-  const store = await createWorkspaceGenerationStore(context, dependencies)
+  const {mediaWorkspacePath} = await resolveWorkspace(context)
+  const store = createGenerationStore(mediaWorkspacePath, {
+    createId: dependencies.createGenerationId,
+    now: dependencies.now,
+  })
+  const generation = await enrichExplainerMetadata(
+    mediaWorkspacePath,
+    await store.get(id),
+  )
   return {
-    generation: await store.get(id),
+    generation,
+    referenceStates: await Promise.all(
+      generation.references.map((reference) =>
+        inspectReference(reference),
+      ),
+    ),
     type: 'generations-get',
+  }
+}
+
+async function enrichExplainerMetadata(
+  mediaWorkspacePath: string,
+  generation: GenerationRecord,
+): Promise<GenerationRecord> {
+  if (
+    generation.selection.kind !== 'scenario' ||
+    generation.selection.scenario !== 'explainer-video' ||
+    generation.scenario === null
+  ) {
+    return generation
+  }
+  const options = generation.scenario.options
+  if (
+    options['resolved-voice'] !== undefined &&
+    options['output-width'] !== undefined &&
+    options['output-height'] !== undefined
+  ) {
+    return generation
+  }
+  const workflowPath = join(
+    mediaWorkspacePath,
+    'generations',
+    generation.id,
+    'working',
+    'workflow.json',
+  )
+  let raw: string
+  try {
+    raw = await readFile(workflowPath, 'utf8')
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    ) {
+      return generation
+    }
+    throw error
+  }
+  const value: unknown = JSON.parse(raw)
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('request' in value) ||
+    typeof value.request !== 'object' ||
+    value.request === null
+  ) {
+    return generation
+  }
+  const request = value.request
+  const aspectRatio =
+    'aspectRatio' in request &&
+    typeof request.aspectRatio === 'string'
+      ? request.aspectRatio
+      : options['aspect-ratio']
+  const vertical = aspectRatio === '9:16'
+  return {
+    ...generation,
+    scenario: {
+      ...generation.scenario,
+      options: {
+        ...options,
+        'output-height':
+          options['output-height'] ?? (vertical ? 1280 : 720),
+        'output-width':
+          options['output-width'] ?? (vertical ? 720 : 1280),
+        ...(options['resolved-voice'] !== undefined ||
+        !('voiceId' in request) ||
+        typeof request.voiceId !== 'string'
+          ? {}
+          : {'resolved-voice': request.voiceId}),
+      },
+    },
   }
 }
 
@@ -1482,6 +1857,13 @@ function normalizeSpeechEndpoint(value: string): string {
     throw new MediaGenError(
       'invalid_speech_endpoint',
       'Azure Speech endpoint must use an Azure Speech hostname',
+      2,
+    )
+  }
+  if (!isAzureSpeechSynthesisEndpoint(value)) {
+    throw new MediaGenError(
+      'invalid_speech_endpoint',
+      'Azure Speech synthesis endpoint must use a regional tts.speech.microsoft.com hostname',
       2,
     )
   }

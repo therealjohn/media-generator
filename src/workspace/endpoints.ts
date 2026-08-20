@@ -24,6 +24,19 @@ export function isAzureSpeechEndpoint(value: string): boolean {
   )
 }
 
+export function isAzureSpeechSynthesisEndpoint(
+  value: string,
+): boolean {
+  const url = parseHttpsUrl(value)
+  return (
+    url !== undefined &&
+    hasNamedSubdomain(
+      url.hostname,
+      '.tts.speech.microsoft.com',
+    )
+  )
+}
+
 function parseHttpsUrl(value: string): URL | undefined {
   try {
     const url = new URL(value)

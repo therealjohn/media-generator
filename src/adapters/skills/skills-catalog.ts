@@ -48,10 +48,10 @@ Media Gen discovers supported deployments and writes non-secret mappings to \`.m
 Run:
 
 \`\`\`text
-mg configure speech --endpoint https://<resource>.cognitiveservices.azure.com/ --api-key <key> --voice en-US-Ethan:MAI-Voice-2
+mg configure speech --endpoint https://<region>.tts.speech.microsoft.com/ --api-key <key> --voice en-US-Ethan:MAI-Voice-2
 \`\`\`
 
-Media Gen stores the Speech Connection in the private Local Profile. The API key is never written to \`.mg/config.json\`, Generation records, or structured output.
+Media Gen stores the regional Speech synthesis endpoint and key in the private Local Profile. The API key is never written to \`.mg/config.json\`, Generation records, or structured output. Leave \`--api-key\` unset when updating an existing connection to retain the saved key.
 `,
   'generate/image': `# Generate an image
 
@@ -85,10 +85,10 @@ mg scenarios get explainer-video
 Create:
 
 \`\`\`text
-mg create explainer-video --prompt "<topic or explanation goal>" --preset editorial-motion-graphics --subtitles --duration 12 --aspect-ratio 16:9 [--link <url>]
+mg create explainer-video --prompt "<topic or explanation goal>" --preset editorial-motion-graphics --subtitles --duration 60 --aspect-ratio 16:9 [--link <url>]
 \`\`\`
 
-Voice is disabled by default, so the Scenario only requires a routed \`visuals\` deployment and creates a Sora MP4. To add narration, configure Azure Speech and pass \`--voice <voice-id>\`; optionally pass \`--narration "<spoken script>"\`, otherwise the Creative Brief is spoken. Narration produces a separate MP3 and media muxing remains separate. Agents must read each linked source themselves and put the relevant facts in the Creative Brief; \`--link\` preserves provenance only.
+Voice defaults to Auto and uses the private Speech Connection's default MAI-Voice-2 Voice. Pass \`--voice <voice-id>\` to select another Voice or \`--no-voice\` to disable narration. Media Gen plans model-supported scenes, generates one shared style reference, creates each video and Voice track, and publishes one composed MP4. Failed workflows retain completed artifacts; run \`mg generations resume <id>\` to continue them. Agents must read each linked source themselves and put the relevant facts in the Creative Brief; \`--link\` preserves provenance only.
 `,
   'create/short-form-video': `# Create Short-form video
 

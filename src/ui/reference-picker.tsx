@@ -1,8 +1,7 @@
 import {
   AlertCircle,
-  FileImage,
+  File as FileIcon,
   FileText,
-  FileVideo2,
   ImageIcon,
   Images,
   LoaderCircle,
@@ -20,12 +19,7 @@ import {
 } from '@/components/ui/alert'
 import {Badge} from '@/components/ui/badge'
 import {Button} from '@/components/ui/button'
-import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select'
 import {
   Sheet,
   SheetContent,
@@ -54,20 +48,28 @@ export interface ReferenceSelection {
   mediaType?: string
   outputIndex?: number
   path: string
+  previewUrl?: string
 }
 
 export interface TextReferenceSelection {
   content: string
   format: 'markdown' | 'text'
   id: string
-  title: string
+  title?: string
 }
 
+export type ReferencePickerPurpose =
+  | 'references'
+  | 'source-video'
+  | 'text-context'
+
 interface ReferencePickerProps {
+  compact?: boolean
   onChange(value: ReferenceSelection[]): void
   onTextReferencesChange?(
     value: TextReferenceSelection[],
   ): void
+  purpose?: ReferencePickerPurpose
   textReferences?: TextReferenceSelection[]
   value: ReferenceSelection[]
 }
@@ -75,21 +77,24 @@ interface ReferencePickerProps {
 const api = createApiClient()
 
 export function ReferencePicker({
+  compact = false,
   onChange,
   onTextReferencesChange = () => undefined,
+  purpose = 'references',
   textReferences = [],
   value,
 }: ReferencePickerProps) {
+  const config = referencePickerConfig(purpose)
+  const allowsGenerations =
+    config.sources.includes('images') ||
+    config.sources.includes('videos')
   const [open, setOpen] = useState(false)
-  const [manualPaths, setManualPaths] = useState('')
+  const [browsingLocalFiles, setBrowsingLocalFiles] = useState(false)
   const [textContent, setTextContent] = useState('')
-  const [textFormat, setTextFormat] = useState<
-    'markdown' | 'text'
-  >('markdown')
-  const [textTitle, setTextTitle] = useState('')
-  const [selectionError, setSelectionError] = useState<string | null>(
-    null,
-  )
+  const [selectionError, setSelectionError] = useState<{
+    message: string
+    title: string
+  } | null>(null)
   const [addingGenerationId, setAddingGenerationId] = useState<
     string | null
   >(null)
@@ -101,11 +106,15 @@ export function ReferencePicker({
   >({state: 'idle'})
 
   useEffect(() => {
-    if (!open || generationState.state !== 'idle') {
+    if (
+      !open ||
+      !allowsGenerations ||
+      generationState.state !== 'idle'
+    ) {
       return
     }
     loadGenerations()
-  }, [generationState.state, open])
+  }, [allowsGenerations, generationState.state, open])
 
   function loadGenerations() {
     setGenerationState({state: 'loading'})
@@ -125,24 +134,32 @@ export function ReferencePicker({
       )
   }
 
-  function addManualPaths() {
-    const paths = manualPaths
-      .split(/\r?\n/)
-      .map((path) => path.trim())
-      .filter(Boolean)
-    if (paths.length === 0) {
-      return
+  async function browseLocalFiles() {
+    setSelectionError(null)
+    setBrowsingLocalFiles(true)
+    try {
+      const result = await api.browseReferenceFiles(
+        purpose === 'source-video'
+          ? 'source-video'
+          : 'references',
+      )
+      const additions = result.files.map((file) => ({
+        mediaType: file.mediaType,
+        path: file.path,
+        previewUrl: file.previewUrl,
+      }))
+      applyAssetAdditions(additions)
+    } catch (error) {
+      setSelectionError({
+        message: errorMessage(
+          error,
+          'Local files could not be selected.',
+        ),
+        title: 'Could not browse local files',
+      })
+    } finally {
+      setBrowsingLocalFiles(false)
     }
-    onChange(
-      mergeReferences(
-        value,
-        paths.map((path) => ({
-          mediaType: inferMediaType(path),
-          path,
-        })),
-      ),
-    )
-    setManualPaths('')
   }
 
   async function addGeneration(generation: GenerationRecord) {
@@ -150,24 +167,23 @@ export function ReferencePicker({
     setAddingGenerationId(generation.id)
     try {
       const result = await api.addReferences([generation.id])
-      onChange(
-        mergeReferences(
-          value,
-          result.references.map((reference, outputIndex) => ({
-            generationId: reference.generationId,
-            mediaType: reference.mediaType,
-            outputIndex,
-            path: reference.path,
-          })),
-        ),
+      const additions = result.references.map(
+        (reference, outputIndex) => ({
+          generationId: reference.generationId,
+          mediaType: reference.mediaType,
+          outputIndex,
+          path: reference.path,
+        }),
       )
+      applyAssetAdditions(additions)
     } catch (error) {
-      setSelectionError(
-        errorMessage(
+      setSelectionError({
+        message: errorMessage(
           error,
           'The Generation reference could not be added.',
         ),
-      )
+        title: 'Could not add Generation reference',
+      })
     } finally {
       setAddingGenerationId(null)
     }
@@ -177,26 +193,38 @@ export function ReferencePicker({
     onChange(value.filter((reference) => reference.path !== path))
   }
 
+  function applyAssetAdditions(additions: ReferenceSelection[]) {
+    if (purpose === 'source-video') {
+      if (additions.length !== 1) {
+        setSelectionError({
+          message:
+            'Select a source Generation with exactly one video output.',
+          title: 'Choose one video output',
+        })
+        return
+      }
+      onChange(additions)
+      return
+    }
+    onChange(mergeReferences(value, additions))
+  }
+
   function addTextReference() {
     const content = textContent.trim()
     if (content.length === 0) {
       return
     }
-    const title =
-      textTitle.trim() || `Text Reference ${textReferences.length + 1}`
     onTextReferencesChange([
       ...textReferences,
       {
         content,
-        format: textFormat,
+        format: 'text',
         id:
           globalThis.crypto?.randomUUID?.() ??
           `text-${Date.now()}-${textReferences.length}`,
-        title,
       },
     ])
     setTextContent('')
-    setTextTitle('')
   }
 
   function removeTextReference(id: string) {
@@ -207,11 +235,53 @@ export function ReferencePicker({
 
   return (
     <>
+      {compact ? (
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+          <Button
+            aria-label={config.addLabel}
+            data-reference-dropzone="true"
+            onClick={() => setOpen(true)}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <Plus aria-hidden="true" />
+            {config.addLabel}
+          </Button>
+          {value.map((reference) => (
+            <CompactReferenceBadge
+              key={reference.path}
+              onRemove={() => removeReference(reference.path)}
+              reference={reference}
+            />
+          ))}
+          {textReferences.map((reference) => (
+            <Badge
+              className="max-w-52 gap-1.5 py-1"
+              key={reference.id}
+              variant="outline"
+            >
+              <FileText aria-hidden="true" className="size-3" />
+              <span className="truncate">
+                {textReferenceLabel(reference)}
+              </span>
+              <button
+                aria-label={`Remove text reference ${textReferenceLabel(reference)}`}
+                className="rounded-sm text-muted-foreground hover:text-foreground"
+                onClick={() => removeTextReference(reference.id)}
+                type="button"
+              >
+                <X aria-hidden="true" className="size-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      ) : (
       <div className="grid gap-2">
-        <Label>References</Label>
+        <Label>{config.fieldLabel}</Label>
         {value.length === 0 && textReferences.length === 0 ? (
           <Button
-            aria-label="Add references"
+            aria-label={config.addLabel}
             className="h-36 w-full flex-col gap-3 border-dashed bg-muted/10 text-muted-foreground hover:bg-muted/25 hover:text-foreground"
             data-reference-dropzone="true"
             onClick={() => setOpen(true)}
@@ -221,17 +291,17 @@ export function ReferencePicker({
             <ReferenceIcons />
             <span className="grid gap-1 text-center">
               <strong className="font-heading text-sm font-medium">
-                Add references
+                {config.addLabel}
               </strong>
               <span className="text-xs font-normal">
-                Local files, pasted text, or prior Generations
+                {config.emptyDescription}
               </span>
             </span>
           </Button>
         ) : (
           <div className="flex min-h-36 flex-wrap items-center gap-3 rounded-xl border bg-muted/10 p-4">
             <Button
-              aria-label="Add more references"
+              aria-label={config.addMoreLabel}
               className="size-24 shrink-0 rounded-2xl border-dashed"
               onClick={() => setOpen(true)}
               type="button"
@@ -256,18 +326,17 @@ export function ReferencePicker({
           </div>
         )}
         <p className="text-xs leading-5 text-muted-foreground">
-          Add local files, pasted text or Markdown, or reuse outputs
-          from prior Generations.
+          {config.help}
         </p>
       </div>
+      )}
 
       <Sheet onOpenChange={setOpen} open={open}>
         <SheetContent className="!w-full sm:!max-w-3xl">
           <SheetHeader className="border-b">
-            <SheetTitle>Add references</SheetTitle>
+            <SheetTitle>{config.sheetTitle}</SheetTitle>
             <SheetDescription>
-              Choose local files, paste text or Markdown, or reuse
-              outputs from this Media Workspace.
+              {config.sheetDescription}
             </SheetDescription>
           </SheetHeader>
 
@@ -279,132 +348,132 @@ export function ReferencePicker({
             >
               <AlertCircle aria-hidden="true" />
               <AlertTitle id="reference-selection-error-title">
-                Could not add Generation reference
+                {selectionError.title}
               </AlertTitle>
-              <AlertDescription>{selectionError}</AlertDescription>
+              <AlertDescription>
+                {selectionError.message}
+              </AlertDescription>
             </Alert>
           ) : null}
 
           <Tabs
             className="min-h-0 flex-1 px-4 pb-4"
-            defaultValue="local"
+            defaultValue={config.defaultTab}
           >
-            <TabsList className="grid h-auto w-full grid-cols-4">
-              <TabsTrigger value="local">
-                <Upload aria-hidden="true" />
-                Local files
-              </TabsTrigger>
-              <TabsTrigger
-                aria-label="Text"
-                value="text"
-              >
-                <FileText aria-hidden="true" />
-                Text
-              </TabsTrigger>
-              <TabsTrigger
-                aria-label="Image Generations"
-                value="images"
-              >
-                <Images aria-hidden="true" />
-                <span className="hidden sm:inline">
-                  Image Generations
-                </span>
-                <span className="sm:hidden">Images</span>
-              </TabsTrigger>
-              <TabsTrigger
-                aria-label="Video Generations"
-                value="videos"
-              >
-                <Video aria-hidden="true" />
-                <span className="hidden sm:inline">
-                  Video Generations
-                </span>
-                <span className="sm:hidden">Videos</span>
-              </TabsTrigger>
+            <TabsList
+              className="grid h-auto w-full"
+              style={{
+                gridTemplateColumns: `repeat(${config.sources.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {config.sources.includes('local') ? (
+                <TabsTrigger value="local">
+                  <Upload aria-hidden="true" />
+                  Local files
+                </TabsTrigger>
+              ) : null}
+              {config.sources.includes('text') ? (
+                <TabsTrigger aria-label="Text" value="text">
+                  <FileText aria-hidden="true" />
+                  Text
+                </TabsTrigger>
+              ) : null}
+              {config.sources.includes('images') ? (
+                <TabsTrigger
+                  aria-label="Image Generations"
+                  value="images"
+                >
+                  <Images aria-hidden="true" />
+                  <span className="hidden sm:inline">
+                    Image Generations
+                  </span>
+                  <span className="sm:hidden">Images</span>
+                </TabsTrigger>
+              ) : null}
+              {config.sources.includes('videos') ? (
+                <TabsTrigger
+                  aria-label="Video Generations"
+                  value="videos"
+                >
+                  <Video aria-hidden="true" />
+                  <span className="hidden sm:inline">
+                    Video Generations
+                  </span>
+                  <span className="sm:hidden">Videos</span>
+                </TabsTrigger>
+              ) : null}
             </TabsList>
 
-            <TabsContent
-              className="min-h-0 overflow-y-auto pt-4"
-              value="local"
-            >
-              <div className="grid gap-3">
-                <div className="grid gap-2">
-                  <Label htmlFor="reference-paths">
-                    Reference paths
-                  </Label>
-                  <Textarea
-                    className="min-h-36 resize-y"
-                    id="reference-paths"
-                    onChange={(event) =>
-                      setManualPaths(event.target.value)
-                    }
-                    placeholder={
-                      'C:\\assets\\product.png\nOne local path per line'
-                    }
-                    value={manualPaths}
-                  />
-                </div>
+            {config.sources.includes('local') ? (
+              <TabsContent
+                className="min-h-0 overflow-y-auto pt-4"
+                value="local"
+              >
+              <div className="grid gap-4">
                 <Button
                   className="w-fit"
-                  disabled={manualPaths.trim().length === 0}
-                  onClick={addManualPaths}
+                  disabled={browsingLocalFiles}
+                  onClick={() => void browseLocalFiles()}
                   type="button"
                 >
-                  <Plus aria-hidden="true" />
-                  Add paths
+                  {browsingLocalFiles ? (
+                    <LoaderCircle
+                      aria-hidden="true"
+                      className="animate-spin"
+                    />
+                  ) : (
+                    <Upload aria-hidden="true" />
+                  )}
+                  {browsingLocalFiles ? 'Browsing...' : 'Browse files'}
                 </Button>
+                <p className="text-sm text-muted-foreground">
+                  {purpose === 'source-video'
+                    ? 'Choose one MP4 or MOV file. Media Gen uses its path automatically.'
+                    : 'Choose files from this computer. Media Gen uses their paths automatically.'}
+                </p>
+                {value.some(
+                  (reference) => reference.generationId === undefined,
+                ) ? (
+                  <div
+                    aria-label="Selected local files"
+                    className="flex flex-wrap gap-3"
+                    role="group"
+                  >
+                    {value
+                      .filter(
+                        (reference) =>
+                          reference.generationId === undefined,
+                      )
+                      .map((reference) => (
+                        <ReferencePreview
+                          key={reference.path}
+                          onRemove={() =>
+                            removeReference(reference.path)
+                          }
+                          reference={reference}
+                        />
+                      ))}
+                  </div>
+                ) : null}
               </div>
-            </TabsContent>
+              </TabsContent>
+            ) : null}
 
-            <TabsContent
-              className="min-h-0 overflow-y-auto pt-4"
-              value="text"
-            >
+            {config.sources.includes('text') ? (
+              <TabsContent
+                className="min-h-0 overflow-y-auto pt-4"
+                value="text"
+              >
               <div className="grid gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="text-reference-title">Title</Label>
-                  <Input
-                    id="text-reference-title"
-                    onChange={(event) =>
-                      setTextTitle(event.target.value)
-                    }
-                    placeholder="Product documentation"
-                    value={textTitle}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="text-reference-format">Format</Label>
-                  <NativeSelect
-                    className="w-full"
-                    id="text-reference-format"
-                    onChange={(event) =>
-                      setTextFormat(
-                        event.target.value === 'text'
-                          ? 'text'
-                          : 'markdown',
-                      )
-                    }
-                    value={textFormat}
-                  >
-                    <NativeSelectOption value="markdown">
-                      Markdown
-                    </NativeSelectOption>
-                    <NativeSelectOption value="text">
-                      Plain text
-                    </NativeSelectOption>
-                  </NativeSelect>
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="text-reference-content">
-                    Text or Markdown content
-                  </Label>
+                  <Label htmlFor="text-reference-content">Text</Label>
                   <Textarea
                     className="min-h-64 resize-y font-mono text-sm"
                     id="text-reference-content"
                     onChange={(event) =>
                       setTextContent(event.target.value)
                     }
-                    placeholder="# Product documentation"
+                    placeholder="Paste reference text"
                     value={textContent}
                   />
                 </div>
@@ -415,15 +484,17 @@ export function ReferencePicker({
                   type="button"
                 >
                   <Plus aria-hidden="true" />
-                  Add Text Reference
+                  Add text
                 </Button>
               </div>
-            </TabsContent>
+              </TabsContent>
+            ) : null}
 
-            <TabsContent
-              className="min-h-0 overflow-y-auto pt-4"
-              value="images"
-            >
+            {config.sources.includes('images') ? (
+              <TabsContent
+                className="min-h-0 overflow-y-auto pt-4"
+                value="images"
+              >
               <GenerationReferenceGrid
                 addingGenerationId={addingGenerationId}
                 mediaType="image"
@@ -432,12 +503,14 @@ export function ReferencePicker({
                 selected={value}
                 state={generationState}
               />
-            </TabsContent>
+              </TabsContent>
+            ) : null}
 
-            <TabsContent
-              className="min-h-0 overflow-y-auto pt-4"
-              value="videos"
-            >
+            {config.sources.includes('videos') ? (
+              <TabsContent
+                className="min-h-0 overflow-y-auto pt-4"
+                value="videos"
+              >
               <GenerationReferenceGrid
                 addingGenerationId={addingGenerationId}
                 mediaType="video"
@@ -446,12 +519,68 @@ export function ReferencePicker({
                 selected={value}
                 state={generationState}
               />
-            </TabsContent>
+              </TabsContent>
+            ) : null}
           </Tabs>
         </SheetContent>
       </Sheet>
     </>
   )
+}
+
+type ReferenceSourceTab = 'images' | 'local' | 'text' | 'videos'
+
+function referencePickerConfig(purpose: ReferencePickerPurpose): {
+  addLabel: string
+  addMoreLabel: string
+  defaultTab: 'local' | 'text'
+  emptyDescription: string
+  fieldLabel: string
+  help: string
+  sheetDescription: string
+  sheetTitle: string
+  sources: readonly ReferenceSourceTab[]
+} {
+  if (purpose === 'source-video') {
+    return {
+      addLabel: 'Choose source video',
+      addMoreLabel: 'Change source video',
+      defaultTab: 'local',
+      emptyDescription: 'One local MP4 or MOV, or a prior video',
+      fieldLabel: 'Source video',
+      help: 'Choose exactly one MP4 or MOV source video.',
+      sheetDescription:
+        'Choose one local MP4 or MOV file, or reuse a prior Video Generation.',
+      sheetTitle: 'Add source video',
+      sources: ['local', 'videos'],
+    }
+  }
+  if (purpose === 'text-context') {
+    return {
+      addLabel: 'Add context',
+      addMoreLabel: 'Add more context',
+      defaultTab: 'text',
+      emptyDescription: 'Paste supporting text',
+      fieldLabel: 'Context',
+      help: 'Paste optional text to guide the result.',
+      sheetDescription: 'Paste optional supporting text.',
+      sheetTitle: 'Add context',
+      sources: ['text'],
+    }
+  }
+  return {
+    addLabel: 'Add references',
+    addMoreLabel: 'Add more references',
+    defaultTab: 'local',
+    emptyDescription: 'Local files, pasted text, or prior Generations',
+    fieldLabel: 'References',
+    help:
+      'Add local files, paste text, or reuse outputs from prior Generations.',
+    sheetDescription:
+      'Choose local files, paste text, or reuse outputs from this Media Workspace.',
+    sheetTitle: 'Add references',
+    sources: ['local', 'text', 'images', 'videos'],
+  }
 }
 
 function ReferenceIcons() {
@@ -467,6 +596,42 @@ function ReferenceIcons() {
   )
 }
 
+function CompactReferenceBadge({
+  onRemove,
+  reference,
+}: {
+  onRemove(): void
+  reference: ReferenceSelection
+}) {
+  const previewSource = referencePreviewSource(reference)
+  const isImage = reference.mediaType?.startsWith('image/') ?? false
+  return (
+    <Badge
+      className="max-w-52 gap-1.5 py-1"
+      variant="outline"
+    >
+      {previewSource !== undefined && isImage ? (
+        <img
+          alt={`Reference ${fileName(reference.path)}`}
+          className="size-5 rounded-sm object-cover"
+          src={previewSource}
+        />
+      ) : (
+        <FileIcon aria-hidden="true" className="size-3" />
+      )}
+      <span className="truncate">{fileName(reference.path)}</span>
+      <button
+        aria-label={`Remove ${fileName(reference.path)}`}
+        className="rounded-sm text-muted-foreground hover:text-foreground"
+        onClick={onRemove}
+        type="button"
+      >
+        <X aria-hidden="true" className="size-3" />
+      </button>
+    </Badge>
+  )
+}
+
 function ReferencePreview({
   onRemove,
   reference,
@@ -474,17 +639,14 @@ function ReferencePreview({
   onRemove(): void
   reference: ReferenceSelection
 }) {
-  const previewSource =
-    reference.generationId === undefined
-      ? undefined
-      : `/api/generations/${encodeURIComponent(reference.generationId)}/outputs/${reference.outputIndex ?? 0}`
+  const previewSource = referencePreviewSource(reference)
   const isImage = reference.mediaType?.startsWith('image/') ?? false
   const isVideo = reference.mediaType?.startsWith('video/') ?? false
 
   return (
     <div
       className="group relative grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border bg-card"
-      title={reference.path}
+      title={fileName(reference.path)}
     >
       {previewSource !== undefined && isImage ? (
         <img
@@ -501,22 +663,16 @@ function ReferencePreview({
           preload="metadata"
           src={previewSource}
         />
-      ) : isVideo ? (
-        <FileVideo2
-          aria-hidden="true"
-          className="size-7 text-muted-foreground"
-        />
       ) : (
-        <FileImage
-          aria-hidden="true"
-          className="size-7 text-muted-foreground"
-        />
+        <GenericFilePreview path={reference.path} />
       )}
-      <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1 text-[10px] text-white">
-        {fileName(reference.path)}
-      </span>
+      {previewSource !== undefined ? (
+        <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1 text-[10px] text-white">
+          {fileName(reference.path)}
+        </span>
+      ) : null}
       <Button
-        aria-label={`Remove reference ${reference.path}`}
+        aria-label={`Remove reference ${fileName(reference.path)}`}
         className="absolute top-1 right-1 opacity-0 shadow group-hover:opacity-100 focus-visible:opacity-100"
         onClick={onRemove}
         size="icon-xs"
@@ -529,6 +685,17 @@ function ReferencePreview({
   )
 }
 
+function referencePreviewSource(
+  reference: ReferenceSelection,
+): string | undefined {
+  return (
+    reference.previewUrl ??
+    (reference.generationId === undefined
+      ? undefined
+      : `/api/generations/${encodeURIComponent(reference.generationId)}/outputs/${reference.outputIndex ?? 0}`)
+  )
+}
+
 function TextReferencePreview({
   onRemove,
   reference,
@@ -536,20 +703,21 @@ function TextReferencePreview({
   onRemove(): void
   reference: TextReferenceSelection
 }) {
+  const label = textReferenceLabel(reference)
   return (
     <div
       className="group relative grid size-24 shrink-0 place-items-center overflow-hidden rounded-2xl border bg-card"
-      title={reference.title}
+      title={label}
     >
       <FileText
         aria-hidden="true"
         className="size-7 text-muted-foreground"
       />
       <span className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1 text-[10px] text-white">
-        {reference.title}
+        {label}
       </span>
       <Button
-        aria-label={`Remove Text Reference ${reference.title}`}
+        aria-label={`Remove text reference ${label}`}
         className="absolute top-1 right-1 opacity-0 shadow group-hover:opacity-100 focus-visible:opacity-100"
         onClick={onRemove}
         size="icon-xs"
@@ -559,6 +727,25 @@ function TextReferencePreview({
         <X aria-hidden="true" />
       </Button>
     </div>
+  )
+}
+
+function GenericFilePreview({path}: {path: string}) {
+  const details = fileDetails(path)
+  return (
+    <span className="grid w-full justify-items-center gap-1 px-2 text-center">
+      <span className="sr-only">{fileName(path)}</span>
+      <FileIcon
+        aria-hidden="true"
+        className="size-7 text-muted-foreground"
+      />
+      <span className="w-full truncate text-[11px] font-medium">
+        {details.title}
+      </span>
+      <Badge className="px-1.5 text-[9px]" variant="secondary">
+        {details.extension}
+      </Badge>
+    </span>
   )
 }
 
@@ -702,14 +889,36 @@ function mergeReferences(
   return [...references.values()]
 }
 
-function inferMediaType(path: string) {
-  return /\.(mp4|mov|webm)$/i.test(path)
-    ? 'video/*'
-    : /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(path)
-      ? 'image/*'
-      : undefined
-}
-
 function fileName(path: string) {
   return path.split(/[\\/]/).at(-1) ?? path
+}
+
+function fileDetails(path: string): {
+  extension: string
+  title: string
+} {
+  const name = fileName(path)
+  const extensionIndex = name.lastIndexOf('.')
+  if (extensionIndex <= 0 || extensionIndex === name.length - 1) {
+    return {extension: 'FILE', title: name}
+  }
+  return {
+    extension: name.slice(extensionIndex + 1).toUpperCase(),
+    title: name.slice(0, extensionIndex),
+  }
+}
+
+function textReferenceLabel(
+  reference: TextReferenceSelection,
+): string {
+  const explicitTitle = reference.title?.trim()
+  if (explicitTitle) {
+    return explicitTitle
+  }
+  const firstLine = reference.content
+    .trim()
+    .split(/\r?\n/, 1)[0]
+    ?.replace(/^#{1,6}\s+/, '')
+    .trim()
+  return firstLine?.slice(0, 40) || 'Text reference'
 }

@@ -2,6 +2,17 @@
 
 Media Gen includes or adapts the following third-party material.
 
+## FFmpeg and FFprobe
+
+Local media composition uses
+[`ffmpeg-static`](https://github.com/eugeneware/ffmpeg-static), licensed
+GPL-3.0-or-later, and
+[`ffprobe-static`](https://github.com/joshwnj/ffprobe-static), whose package
+wrapper is MIT-licensed. Their packaged FFmpeg and FFprobe executables remain
+subject to the licenses and notices of the corresponding FFmpeg builds.
+FFmpeg source and licensing information are available from
+[ffmpeg.org](https://ffmpeg.org/).
+
 ## MIT-licensed material
 
 - Agent skills under `.agents/skills` are sourced from

@@ -181,8 +181,8 @@ const definitions: Record<string, HelpDefinition> = {
     sections: [
       {
         lines: [
-          '  --endpoint <url>   Azure Speech resource endpoint (required)',
-          '  --api-key <key>    API key override; prefer MEDIA_GEN_SPEECH_API_KEY',
+          '  --endpoint <url>   Regional Azure Speech synthesis endpoint (required)',
+          '  --api-key <key>    API key; omit on updates to retain the saved key',
           '  --voice <name>     Default MAI Voice name (required)',
           ...outputOptions,
         ],
@@ -197,13 +197,13 @@ const definitions: Record<string, HelpDefinition> = {
       {
         lines: [
           '  Set MEDIA_GEN_SPEECH_API_KEY, then run:',
-          '  {bin} configure speech --endpoint https://<resource>.cognitiveservices.azure.com/ --voice en-US-Ethan:MAI-Voice-2',
+          '  {bin} configure speech --endpoint https://<region>.tts.speech.microsoft.com/ --voice en-US-Ethan:MAI-Voice-2',
         ],
         title: 'EXAMPLES',
       },
     ],
     summary:
-      'Save a private Azure Speech resource endpoint, API key, and default MAI Voice.',
+      'Save a regional Azure Speech synthesis endpoint, private API key, and default MAI Voice.',
     usage: [
       '{bin} configure speech --endpoint <url> --voice <name> [--api-key <key>] [--output toon|json]',
     ],
@@ -257,10 +257,10 @@ const definitions: Record<string, HelpDefinition> = {
           '  --source <path>         Source material; repeat for multiple files',
           '  --link <url>            Record a Web Reference URL',
           '  --preset <id>           Visual Preset',
-          '  --voice <id>            Enable narration with this Voice (off by default)',
-          '  --narration <text>       Spoken script when --voice is used',
+          '  --voice <auto|id>       Narration Voice (default: auto)',
+          '  --no-voice              Disable narration',
           '  --subtitles             Include subtitles',
-          '  --duration <seconds>    Target duration',
+          '  --duration <seconds>    Total duration from 15 to 600 seconds',
           '  --aspect-ratio <ratio>  16:9 or 9:16',
           '  --deployment visuals=<id>  Override the routed visuals deployment',
           ...outputOptions,
@@ -417,6 +417,7 @@ const definitions: Record<string, HelpDefinition> = {
           '  get        Read one Generation',
           '  export     Copy generated media into the project',
           '  recreate   Generate again from an existing Generation',
+          '  resume     Continue a failed workflow Generation',
           '  edit       Generate from an existing output',
           '  reference  Return reusable output paths',
           '  delete     Permanently delete one Generation',
@@ -570,6 +571,26 @@ const definitions: Record<string, HelpDefinition> = {
     summary: 'Generate again from an existing Generation.',
     usage: [
       '{bin} generations recreate <id> [--prompt <text>] [--style <style>] [--output toon|json]',
+    ],
+  },
+  'generations resume': {
+    nextSteps: [
+      'Run `{bin} generations get <id>` to inspect resumed progress.',
+    ],
+    sections: [
+      {
+        lines: outputOptions,
+        title: 'OPTIONS',
+      },
+      {
+        lines: ['  {bin} generations resume 01GENERATION'],
+        title: 'EXAMPLES',
+      },
+    ],
+    summary:
+      'Resume incomplete workflow steps without repeating successful work.',
+    usage: [
+      '{bin} generations resume <id> [--output toon|json]',
     ],
   },
   'generations edit': {
@@ -902,7 +923,6 @@ function extractHelpPath(argv: string[]): string[] {
     '--generation',
     '--height',
     '--model',
-    '--narration',
     '--language',
     '--link',
     '--name',

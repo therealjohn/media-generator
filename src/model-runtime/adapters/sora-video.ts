@@ -4,6 +4,7 @@ import {setTimeout as delay} from 'node:timers/promises'
 
 import {AzureCliCredential} from '@azure/identity'
 
+import {getVideoModelProfile} from '../../catalog/models.js'
 import type {
   ModelAdapter,
   ProviderGenerationRequest,
@@ -60,22 +61,17 @@ export class SoraVideoJobAdapter implements ModelAdapter {
     const dependencies = this.#dependencies
     const endpoint = azureOpenAiEndpoint(request.projectEndpoint)
     const useNativeV1 =
-      request.references.length === 0 &&
       optionalInteger(
         request.controls,
         ['nVariants', 'n_variants'],
         1,
       ) === 1
     const nativeSubmission = useNativeV1
-      ? createNativeSubmission(request)
+      ? await createNativeSubmission(
+          request,
+          dependencies.readFile,
+        )
       : undefined
-    const legacySubmission =
-      nativeSubmission === undefined
-        ? await createLegacySubmission(
-            request,
-            dependencies.readFile,
-          )
-        : undefined
     const accessToken = await dependencies.getAccessToken(azureAiScope)
     const authorizationHeaders = {
       Authorization: `Bearer ${accessToken}`,
@@ -94,11 +90,10 @@ export class SoraVideoJobAdapter implements ModelAdapter {
 
     return generateLegacyVideo(
       endpoint,
-      legacySubmission ??
-        (await createLegacySubmission(
-          request,
-          dependencies.readFile,
-        )),
+      await createLegacySubmission(
+        request,
+        dependencies.readFile,
+      ),
       authorizationHeaders,
       dependencies,
     )
@@ -107,17 +102,20 @@ export class SoraVideoJobAdapter implements ModelAdapter {
 
 async function generateNativeVideo(
   endpoint: string,
-  body: string,
+  submission: {
+    body: FormData | string
+    headers: Record<string, string>
+  },
   authorizationHeaders: Record<string, string>,
   dependencies: SoraVideoAdapterDependencies,
 ): Promise<ProviderGenerationResult | undefined> {
   const response = await dependencies.fetch(
     `${endpoint}/openai/v1/videos`,
     {
-      body,
+      body: submission.body,
       headers: {
         ...authorizationHeaders,
-        'Content-Type': 'application/json',
+        ...submission.headers,
       },
       method: 'POST',
     },
@@ -271,23 +269,56 @@ function azureOpenAiEndpoint(projectEndpoint: string): string {
   return `https://${resourceName}.openai.azure.com`
 }
 
-function createNativeSubmission(
+async function createNativeSubmission(
   request: ProviderGenerationRequest,
-): string {
+  readReference: (path: string) => Promise<Buffer>,
+): Promise<{
+  body: FormData | string
+  headers: Record<string, string>
+}> {
   const width = requiredInteger(request.controls, 'width')
   const height = requiredInteger(request.controls, 'height')
-  return JSON.stringify({
+  const fields = {
     model: request.deploymentName,
     prompt: request.prompt,
-    seconds: String(
-      optionalInteger(
-        request.controls,
-        ['nSeconds', 'n_seconds'],
-        5,
-      ),
-    ),
+    seconds: String(soraDuration(request)),
     size: `${width}x${height}`,
-  })
+  }
+  if (request.references.length === 0) {
+    return {
+      body: JSON.stringify(fields),
+      headers: {'Content-Type': 'application/json'},
+    }
+  }
+  if (request.references.length > 1) {
+    throw new Error('Sora video generation accepts at most one reference')
+  }
+  const reference = request.references[0]
+  if (reference === undefined) {
+    throw new Error('Sora reference was not available')
+  }
+  if (
+    !reference.mediaType.startsWith('image/') &&
+    !reference.mediaType.startsWith('video/')
+  ) {
+    throw new Error(
+      `Sora does not support reference media type "${reference.mediaType}"`,
+    )
+  }
+  const fileName = basename(reference.path)
+  const contents = await readReference(reference.path)
+  const form = new FormData()
+  for (const [name, value] of Object.entries(fields)) {
+    form.set(name, value)
+  }
+  form.set(
+    'input_reference',
+    new Blob([new Uint8Array(contents)], {
+      type: reference.mediaType,
+    }),
+    fileName,
+  )
+  return {body: form, headers: {}}
 }
 
 async function createLegacySubmission(
@@ -300,11 +331,7 @@ async function createLegacySubmission(
   const fields = {
     height: requiredInteger(request.controls, 'height'),
     model: request.deploymentName,
-    n_seconds: optionalInteger(
-      request.controls,
-      ['nSeconds', 'n_seconds'],
-      5,
-    ),
+    n_seconds: soraDuration(request),
     n_variants: optionalInteger(
       request.controls,
       ['nVariants', 'n_variants'],
@@ -523,6 +550,21 @@ function optionalInteger(
   }
 
   return fallback
+}
+
+function soraDuration(request: ProviderGenerationRequest): number {
+  const profile = getVideoModelProfile(request.modelName)
+  const duration = optionalInteger(
+    request.controls,
+    ['nSeconds', 'n_seconds'],
+    profile.clipDurationsSeconds[0]!,
+  )
+  if (!profile.clipDurationsSeconds.includes(duration)) {
+    throw new Error(
+      `Sora duration ${duration} is unsupported; expected one of ${profile.clipDurationsSeconds.join(', ')} seconds`,
+    )
+  }
+  return duration
 }
 
 function requiredInteger(

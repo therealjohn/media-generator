@@ -5,13 +5,26 @@ import {extname, resolve} from 'node:path'
 import type {ReferenceFingerprint} from './generation-store.js'
 
 const mediaTypes: Record<string, string> = {
+  '.avif': 'image/avif',
   '.gif': 'image/gif',
   '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
   '.mov': 'video/quicktime',
   '.mp4': 'video/mp4',
   '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.pdf': 'application/pdf',
+  '.webm': 'video/webm',
   '.webp': 'image/webp',
+}
+
+export function mediaTypeForReferencePath(path: string): string {
+  return (
+    mediaTypes[extname(path).toLowerCase()] ??
+    'application/octet-stream'
+  )
 }
 
 export async function fingerprintReference(
@@ -24,9 +37,7 @@ export async function fingerprintReference(
   ])
 
   return {
-    mediaType:
-      mediaTypes[extname(path).toLowerCase()] ??
-      'application/octet-stream',
+    mediaType: mediaTypeForReferencePath(path),
     modifiedAt: metadata.mtime.toISOString(),
     path,
     sha256: createHash('sha256').update(contents).digest('hex'),
