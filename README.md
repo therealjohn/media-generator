@@ -1,19 +1,31 @@
 # Media Gen
 
-Media Gen is a local-first image and video generation workspace backed by
-Microsoft Foundry. Use it through a coding-agent skill, the `mg` CLI, or a
-browser UI served on your machine.
+Media Gen is a prototype exploring what a modern enterprise media studio could
+look like when built on an organization's own Microsoft Foundry resources.
+Inspired by video creation tools such as Higgsfield, it combines guided
+creation workflows, model routing, local history, and agent-driven operation
+without introducing a hosted control plane.
 
-Media Gen can:
+The broader idea is to help enterprise teams turn approved context and existing
+assets into repeatable media workflows, including:
 
-- create images and videos with configured Foundry deployments
-- build narrated explainer videos and short-form video variants
-- keep Generation history and working media outside the project directory
-- recreate, edit, resume, reference, and export prior Generations
+- meeting summary videos created from notes, transcripts, and presentation assets
+- trip summary videos assembled from photos, clips, and itinerary context
+- narrated or visual Explainers grounded in internal documentation
+- product marketing images, launch videos, and short-form campaign variants
+
+The working prototype currently provides:
+
+- general image and video Generators using configured Foundry deployments
+- narrated Explainer video and Short-form video Scenarios
+- a coding-agent skill, the `mg` CLI, and a browser UI served locally
+- private Generation history with Recreate, Edit, Resume, Reference, and Export
 
 > [!NOTE]
-> Media Gen is an early source-only prototype. There is no published npm
-> package, and interfaces may change between revisions.
+> This is an early source-only exploration, not a finished enterprise service.
+> Meeting and trip examples describe workflows the prototype is intended to
+> explore; direct meeting, calendar, and travel-system integrations are not
+> included. There is no published npm package, and interfaces may change.
 
 ## Requirements
 
