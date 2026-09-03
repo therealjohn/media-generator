@@ -305,7 +305,7 @@ async function createNativeSubmission(
       `Sora does not support reference media type "${reference.mediaType}"`,
     )
   }
-  const fileName = referenceFileName(reference.path)
+  const fileName = basename(reference.path)
   const contents = await readReference(reference.path)
   const form = new FormData()
   for (const [name, value] of Object.entries(fields)) {
@@ -368,7 +368,7 @@ async function createLegacySubmission(
     )
   }
 
-  const fileName = referenceFileName(reference.path)
+  const fileName = basename(reference.path)
   const contents = await readReference(reference.path)
   const form = new FormData()
   for (const [name, value] of Object.entries(fields)) {
@@ -403,10 +403,6 @@ async function createLegacySubmission(
     body: form,
     headers: {},
   }
-}
-
-function referenceFileName(path: string): string {
-  return basename(path.replaceAll('\\', '/'))
 }
 
 async function fetchJson(

@@ -1,3 +1,5 @@
+import {join} from 'node:path'
+
 import {describe, expect, test} from 'vitest'
 
 import type {ProviderGenerationRequest} from '../../../src/model-runtime/model-runtime.js'
@@ -183,7 +185,7 @@ describe('SoraVideoAdapter', () => {
         }),
         new Response(Buffer.from('mp4 bytes')),
       ]
-      const referencePath = `C:\\references\\${fileName}`
+      const referencePath = join('references', fileName)
       const adapter = createSoraVideoAdapter({
         fetch: async (input, init = {}) => {
           observedCalls.push({init, url: String(input)})

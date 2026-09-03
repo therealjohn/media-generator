@@ -1,3 +1,5 @@
+import {join} from 'node:path'
+
 import type {TokenCredential} from '@azure/core-auth'
 import {describe, expect, test} from 'vitest'
 
@@ -128,6 +130,7 @@ describe('MAIImageAdapter', () => {
 
   test('edits one JPEG reference through multipart form data', async () => {
     const referenceBytes = Buffer.from('reference jpeg')
+    const referencePath = join('images', 'product.jpg')
     const readPaths: string[] = []
     let requestBody: FormData | undefined
     let requestHeaders: Headers | undefined
@@ -162,11 +165,11 @@ describe('MAIImageAdapter', () => {
         'https://example.services.ai.azure.com/api/projects/media/',
       prompt: 'Replace the background with a forest',
       references: [
-        reference('C:\\images\\product.jpg', 'image/jpeg'),
+        reference(referencePath, 'image/jpeg'),
       ],
     })
 
-    expect(readPaths).toEqual(['C:\\images\\product.jpg'])
+    expect(readPaths).toEqual([referencePath])
     expect(requestHeaders?.get('authorization')).toBe(
       'Bearer test-token',
     )

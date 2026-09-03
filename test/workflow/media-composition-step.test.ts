@@ -1,3 +1,5 @@
+import {join, resolve} from 'node:path'
+
 import {describe, expect, test} from 'vitest'
 
 import type {
@@ -9,6 +11,11 @@ import {createMediaCompositionStepHandler} from '../../src/workflow/media-compos
 describe('MediaCompositionStepHandler', () => {
   test('resolves scene artifacts and publishes one composed video', async () => {
     const requests: MediaCompositionRequest[] = []
+    const generationDirectory = resolve(
+      'workspace',
+      'generations',
+      '01EXPLAINER',
+    )
     const composer: MediaComposer = {
       compose: async (request) => {
         requests.push(request)
@@ -21,7 +28,7 @@ describe('MediaCompositionStepHandler', () => {
     }
     const handler = createMediaCompositionStepHandler({
       composer,
-      generationDirectory: 'C:\\workspace\\generations\\01EXPLAINER',
+      generationDirectory,
     })
 
     const result = await handler.execute(
@@ -85,30 +92,57 @@ describe('MediaCompositionStepHandler', () => {
     expect(requests).toEqual([
       {
         height: 720,
-        outputPath:
-          'C:\\workspace\\generations\\01EXPLAINER\\outputs\\explainer.mp4',
+        outputPath: join(
+          generationDirectory,
+          'outputs',
+          'explainer.mp4',
+        ),
         scenes: [
           {
             durationSeconds: 20,
             id: 'scene-1',
             narration: 'First scene.',
-            narrationPath:
-              'C:\\workspace\\generations\\01EXPLAINER\\working\\scenes\\scene-1\\voice.mp3',
-            videoPath:
-              'C:\\workspace\\generations\\01EXPLAINER\\working\\scenes\\scene-1\\video.mp4',
+            narrationPath: join(
+              generationDirectory,
+              'working',
+              'scenes',
+              'scene-1',
+              'voice.mp3',
+            ),
+            videoPath: join(
+              generationDirectory,
+              'working',
+              'scenes',
+              'scene-1',
+              'video.mp4',
+            ),
           },
           {
             durationSeconds: 20,
             id: 'scene-2',
             narration: 'Second scene.',
-            narrationPath:
-              'C:\\workspace\\generations\\01EXPLAINER\\working\\scenes\\scene-2\\voice.mp3',
-            videoPath:
-              'C:\\workspace\\generations\\01EXPLAINER\\working\\scenes\\scene-2\\video.mp4',
+            narrationPath: join(
+              generationDirectory,
+              'working',
+              'scenes',
+              'scene-2',
+              'voice.mp3',
+            ),
+            videoPath: join(
+              generationDirectory,
+              'working',
+              'scenes',
+              'scene-2',
+              'video.mp4',
+            ),
           },
         ],
-        subtitlePath:
-          'C:\\workspace\\generations\\01EXPLAINER\\working\\subtitles\\explainer.srt',
+        subtitlePath: join(
+          generationDirectory,
+          'working',
+          'subtitles',
+          'explainer.srt',
+        ),
         subtitles: true,
         width: 1280,
       },

@@ -1,3 +1,5 @@
+import {join} from 'node:path'
+
 import type {TokenCredential} from '@azure/core-auth'
 import {describe, expect, test} from 'vitest'
 
@@ -147,6 +149,7 @@ describe('AzureOpenAIImageAdapter', () => {
 
   test('edits one reference image through multipart form data', async () => {
     const referenceBytes = Buffer.from('reference png')
+    const referencePath = join('images', 'product.png')
     let requestInput: RequestInfo | URL | undefined
     let requestBody: FormData | undefined
     let requestHeaders: Headers | undefined
@@ -182,7 +185,7 @@ describe('AzureOpenAIImageAdapter', () => {
         'https://example.services.ai.azure.com/api/projects/media',
       prompt: 'Put the product on a marble table',
       references: [
-        reference('C:\\images\\product.png', 'image/png'),
+        reference(referencePath, 'image/png'),
       ],
     })
 
