@@ -1,5 +1,7 @@
 # Media Gen
 
+![Media Gen Explainer video workspace](media/media-gen-hero.png)
+
 Media Gen is a prototype exploring what a modern enterprise media studio could
 look like when built on an organization's own Microsoft Foundry resources.
 Inspired by video creation tools such as Higgsfield, it combines guided
