@@ -4,6 +4,7 @@ coverage/
 .playwright-mcp/
 .agents/
 skills-lock.json
+prototypes/scenario-navigation/
 oclif.manifest.json
 *.tgz
 *.log
