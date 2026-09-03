@@ -9,6 +9,7 @@ permissions:
 jobs:
   dependency-review:
     name: Review dependency changes
+    if: github.repository_visibility == 'public'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
