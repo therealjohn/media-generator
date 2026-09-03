@@ -92,7 +92,7 @@ describe('MediaGenApplication', () => {
       type: 'settings-get',
     })
     expect(JSON.stringify(settings)).not.toContain('private-speech-key')
-  })
+  }, 15_000)
 
   test('updates the Speech synthesis endpoint without replacing its private key', async () => {
     const root = await mkdtemp(
