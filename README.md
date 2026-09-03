@@ -119,3 +119,18 @@ For contribution, support, and security guidance, see
 
 [MIT](LICENSE). Third-party material is listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Key takeaway
+
+The main takeaway from this prototype is that the application workflow was
+feasible, but the available video model quality was not good enough to deliver
+the target experience. Sora 2 was the only Foundry video model available to
+test, and it did not produce sufficiently consistent, high-quality results for
+the enterprise content this project explores, including summaries, Explainers,
+and polished product marketing videos.
+
+Alternatives such as Fable and Gemini Omni could not be evaluated because they
+were not available in the Foundry environment used for this project. This is a
+finding about the models and access available for this evaluation, not every
+video model that Foundry may support. A production version would need access
+to stronger models followed by a new quality evaluation.
