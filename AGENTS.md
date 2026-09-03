@@ -5,10 +5,10 @@
 - Read [`CONTEXT.md`](CONTEXT.md) when changing user-facing language, domain
   relationships, or persisted concepts. It is the canonical glossary; keep it
   free of implementation details.
-- Read [`docs/architecture.md`](docs/architecture.md) before changing module
-  boundaries, persistence, routing, or provider integration.
-- Read the relevant file in [`docs/adr/`](docs/adr/) before changing a recorded
-  architectural decision.
+- Read the relevant user guide under [`docs/`](docs/) when changing commands,
+  setup, creation workflows, storage, or privacy behavior.
+- Keep architecture constraints in this file and user documentation in
+  `docs/`.
 
 ## Architecture boundaries
 

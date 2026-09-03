@@ -23,8 +23,8 @@ The Azure CLI is required for live Foundry access, but not for the automated
 test suite.
 
 Read `CONTEXT.md` before changing user-facing language or persisted concepts,
-and read `docs/architecture.md` before changing module boundaries, routing,
-persistence, or provider integration.
+and read `AGENTS.md` before changing module boundaries, routing, persistence,
+or provider integration.
 
 ## Making changes
 

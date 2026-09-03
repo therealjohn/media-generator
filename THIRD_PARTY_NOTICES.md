@@ -21,9 +21,6 @@ applicable FFmpeg license and corresponding-source requirements.
 
 ## MIT-licensed material
 
-- Agent skills under `.agents/skills` are sourced from
-  [mattpocock/skills](https://github.com/mattpocock/skills).
-  Copyright (c) 2026 Matt Pocock.
 - UI component source under `src/components/ui` and the shadcn Tailwind theme
   are generated from or adapted from
   [shadcn/ui](https://github.com/shadcn-ui/ui).

@@ -9,7 +9,7 @@ List the commands used to validate the change.
 
 ## Checklist
 
-- [ ] The change is focused and follows `CONTEXT.md` and `docs/architecture.md`.
+- [ ] The change is focused and follows `CONTEXT.md` and `AGENTS.md`.
 - [ ] Behavior changes include regression tests.
 - [ ] User-facing changes include documentation updates.
 - [ ] No credentials, private endpoints, customer media, or local profile data are included.
