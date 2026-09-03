@@ -10,6 +10,12 @@ Microsoft Foundry. One TypeScript application engine powers:
 The current `0.1.1` prototype supports real Foundry discovery and generation,
 filesystem-backed history, reuse workflows, and explicit model routing.
 
+## Project status
+
+Media Gen is an early prototype. This repository distributes source code only;
+there is no official npm package. Interfaces, persisted schemas, and supported
+model APIs may change between revisions.
+
 ## Prerequisites
 
 - Node.js 22 or later
@@ -270,7 +276,9 @@ finishing a code change.
 - [Implementation plan](docs/implementation-plan.md)
 - [Foundry model API research](docs/research/foundry-media-model-api-surfaces.md)
 - [Contributing](CONTRIBUTING.md)
+- [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 The historical UI exploration remains in

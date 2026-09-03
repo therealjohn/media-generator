@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a focused improvement to Media Gen
+title: "[Feature] "
+body:
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this request.
+          required: true
+        - label: I agree to follow the Code of Conduct.
+          required: true
+
+  - type: textarea
+    attributes:
+      label: Problem
+      description: Describe the user need or limitation without prescribing an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Proposed outcome
+      description: Describe what a successful result would let a Business Creator do.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Add safe-to-share examples, constraints, or screenshots.

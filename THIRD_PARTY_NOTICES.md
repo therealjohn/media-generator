@@ -2,6 +2,8 @@
 
 Media Gen includes or adapts the following third-party material.
 
+The repository's MIT license does not replace the licenses listed below.
+
 ## FFmpeg and FFprobe
 
 Local media composition uses
@@ -12,6 +14,10 @@ wrapper is MIT-licensed. Their packaged FFmpeg and FFprobe executables remain
 subject to the licenses and notices of the corresponding FFmpeg builds.
 FFmpeg source and licensing information are available from
 [ffmpeg.org](https://ffmpeg.org/).
+
+Media Gen invokes these executables as separate processes. Anyone
+redistributing builds that include them is responsible for satisfying the
+applicable FFmpeg license and corresponding-source requirements.
 
 ## MIT-licensed material
 
